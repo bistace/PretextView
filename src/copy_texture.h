@@ -26,10 +26,11 @@ SOFTWARE.
 #include <utility>
 #include <fstream>
 #include <random>
-
+#include <cstdio>
 #include "utilsPretextView.h"
 #include "genomeData.h"
 #include "auto_curation_state.h"
+#include <fmt/core.h>
 
 struct Frag4compress {
     u32 num;
@@ -53,47 +54,78 @@ struct Frag4compress {
 
     void re_allocate_mem(
         const contigs* Contigs, 
-        const SelectArea* select_area=nullptr)
+        const SelectArea* select_area=nullptr, 
+        bool use_for_cut_flag=false)
     {
         cleanup();
         u08 using_select_area = (select_area != nullptr && select_area->select_flag)?1:0;
-        num = Contigs->numberOfContigs;
-        if (using_select_area)
-        {
-            num = select_area->selected_frag_ids.size();
-            if (num < 2)
+        this->num = Contigs->numberOfContigs;
+        std::vector<u32> selected_frag_ids_tmp; 
+        if (using_select_area )
+        {   
+            selected_frag_ids_tmp = select_area->selected_frag_ids;
+            this->num = select_area->selected_frag_ids.size();
+            if (this->num < 2 && !use_for_cut_flag)
             {
-                fprintf(stderr, "The number_of_select_fragments_for_sorting(%d) should not be less than 2, file:%s (line:%d)\n", num, __FILE__, __LINE__);
-                std::abort();
+                fmt::print(
+                    stderr, 
+                    "The number_of_select_fragments_for_sorting({}) should not be less than 2, file:{}, line:{}\n", this->num, __FILE__, __LINE__);
+                assert(0);
+            }
+            if (select_area->source_frag_id >=0 && !use_for_cut_flag) 
+            {
+                this->num ++;
+                selected_frag_ids_tmp.insert(selected_frag_ids_tmp.begin(), select_area->source_frag_id);
+            }
+            if (select_area->sink_frag_id >=0 && !use_for_cut_flag) 
+            {
+                this->num ++;
+                selected_frag_ids_tmp.push_back(select_area->sink_frag_id);
             }
         }
+        else // global area
+        {
+            selected_frag_ids_tmp.resize(this->num);
+            std::iota(selected_frag_ids_tmp.begin(), selected_frag_ids_tmp.end(), 0);
+        }
+
         frag_id = new u32[num];
-        startCoord = new u32[num]; // TODO (shaoheng): it is wired that if I use std::vector<u32> here, the debugger will be stuck where I call the constructor. Sometimes it can work with std::vector, but sometimes it cannot.
+        startCoord = new u32[num]; 
         length = new u32[num];
         inversed = new bool[num];
         metaDataFlags = new u64[num];
         total_length = 0;
 
         // Initialize the startCoord, length, and inversed
+        frag_id[0] = selected_frag_ids_tmp[0];
         inversed[0] = false;
+        startCoord[0] = 0;
         if (using_select_area)
-        {   
-            frag_id[0] = select_area->selected_frag_ids[0];
-            startCoord[0] =select_area->start_pixel;
-            length[0] = Contigs->contigs_arr[select_area->selected_frag_ids[0]].length;
-        }
-        else
         {
-            frag_id[0] = 0;
-            startCoord[0] = 0;
-            length[0] = Contigs->contigs_arr[0].length;
+            s32 tmp = 0;
+            while (tmp < frag_id[0])
+            {
+                startCoord[0] += Contigs->contigs_arr[tmp].length;
+                tmp ++;
+            }
+            if (tmp>=Contigs->numberOfContigs)
+            {
+                fmt::print(
+                    stderr, 
+                    "The frag_id[0]({}) should be less than the number_of_contigs({}), file:{}, line:{}\n", 
+                    frag_id[0], Contigs->numberOfContigs, __FILE__, __LINE__);
+                assert(0);
+            }
         }
+        length[0] = Contigs->contigs_arr[frag_id[0]].length;
+        metaDataFlags[0] = (Contigs->contigs_arr[frag_id[0]].metaDataFlags == nullptr)?0:*(Contigs->contigs_arr[frag_id[0]].metaDataFlags);
         total_length = length[0];
+
         for (u32 i = 1; i < num; i++)
         {   
-            u32 contig_id = using_select_area?select_area->selected_frag_ids[i]:i;
+            u32 contig_id = selected_frag_ids_tmp[i];
             frag_id[i] = contig_id;
-            inversed[i] = false; // todo (shaoheng) add the inversed information
+            inversed[i] = false; // currently, this is not used
             startCoord[i] = startCoord[i-1] + length[i-1];
             length[i] = Contigs->contigs_arr[contig_id].length;
             metaDataFlags[i] = (Contigs->contigs_arr[contig_id].metaDataFlags == nullptr)?0:*(Contigs->contigs_arr[contig_id].metaDataFlags);
@@ -262,10 +294,8 @@ public:
     void cleanup()
     {   
 
-        MY_CHECK(0);
         if (data)
         {   
-            MY_CHECK(0);
             delete[] data;
             data = nullptr;
         }
@@ -273,7 +303,6 @@ public:
 
     void re_allocate_mem(u32 row_num_, u32 col_num_, u32 layer_)
     {   
-        MY_CHECK(0);
         cleanup();
         row_num = row_num_;
         col_num = col_num_;
@@ -283,12 +312,9 @@ public:
         shape[2] = layer_;
         length = row_num * col_num * layer_num;
 
-        MY_CHECK(0);
         data = new T[length];
 
-        MY_CHECK(0);
         memset(data, 0, length * sizeof(T));
-        MY_CHECK(0);
     }
 
     void check_indexing(const u32& row, const u32& col, const u32& layer) const
@@ -316,6 +342,23 @@ public:
     {
         check_indexing(row, col, layer);
         data[row * col_num * layer_num + col* layer_num + layer] = value;
+    }
+
+    void output_to_file(FILE* fp) const
+    {
+        fmt::print(fp, "# Matrix shape: {} {} {}\n", row_num, col_num, layer_num);
+        for (u32 l = 0; l < layer_num; l++)
+        {   
+            fmt::print(fp, "# layer: {}\n", l);
+            for (u32 i = 0; i < row_num; i++)
+            {
+                for (u32 j = 0; j < col_num; j++)
+                {
+                    fmt::print(fp, "{:.4f} ", data[i * col_num * layer_num + j * layer_num + l]);
+                }
+                fmt::print(fp, "\n");
+            }
+        }
     }
 };
 
@@ -409,7 +452,7 @@ private:
 };
 
 
-inline // c++17 needed
+inline
 std::unordered_map<u32, u32> 
 Switch_Channel_Symetric = 
 {   
@@ -438,10 +481,11 @@ struct Values_on_Channel
     }
     void initilize()
     {
-        c[0] = 0.f;
-        c[1] = 0.f;
-        c[2] = 0.f;
-        c[3] = 0.f;
+        // c[0] = 0.f;
+        // c[1] = 0.f;
+        // c[2] = 0.f;
+        // c[3] = 0.f;
+        memset(c, 0, 4 * sizeof(f32));
     }
 }; 
 
@@ -453,7 +497,9 @@ struct Sum_and_Number
 };
     
 
-
+/*
+GraphData类用于存储图数据，将压缩后的hic数据转化为图数据，从而输入到图网络中预测两个片段之间的连接分数。
+*/
 class GraphData
 {
 private:
@@ -573,7 +619,6 @@ public:
 };
 
 
-
 class TexturesArray4AI
 {
 private:
@@ -589,7 +634,7 @@ private:
     Matrix3D<f32>* compressed_hic = nullptr; // [0 - 3] channel represent the 4 directions, channel 4 represents the average of the interaction block
     CompressedExtensions* compressed_extensions = nullptr;
     MassCentre* mass_centres = nullptr;
-    unsigned char** textures = nullptr;
+    unsigned char** textures = nullptr; // used to save the copied textures
     bool is_copied_from_buffer;
     bool is_compressed;
 public:
@@ -639,6 +684,8 @@ public:
 
     u32 get_num_textures_1d(){return num_textures_1d;}
 
+    u32 get_num_pixels_1d() {return num_pixels_1d;}
+
     void check_copied_from_buffer() const;
     void copy_buffer_to_textures(const contact_matrix *contact_matrix_, bool show_flag=false);
     void copy_buffer_to_textures_dynamic(const contact_matrix *contact_matrix_, bool show_flag=false);
@@ -654,6 +701,15 @@ public:
         f32 D_hic_ratio=0.05f, 
         u32 maximum_D=5000, 
         f32 min_hic_density = 30.f);
+
+    void cal_maximum_number_of_shift(
+        u32& D,
+        std::vector<f32>& norm_diag_mean,
+        const contigs* Contigs,
+        f32 D_hic_ratio,
+        u32 maximum_D,
+        f32 min_hic_density);
+
     void cal_compressed_extension(const extension_sentinel &Extensions);
 
     Sum_and_Number get_fragement_diag_mean_square(
@@ -712,6 +768,10 @@ public:
     void output_mass_centres_to_file() const;
     void output_frags4AI_to_file() const;
     void output_compressed_hic_massCetre_extension_for_python() const;
+    void initialise_textures();
+    void clear_textures();
+    void clear_compressed_hic();
+    void rearrange_textures(const u32* rearrange_index);
 };
 
 

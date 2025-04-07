@@ -29,6 +29,7 @@ SOFTWARE.
 #include "showWindowData.h"
 
 
+#define Max_Number_of_Contigs 4096
 
 struct
 file_atlas_entry
@@ -59,7 +60,7 @@ struct original_contig
 {
     u32 name[16];         // contig name
     u32 *contigMapPixels = nullptr; // global center coordinate of the fragments
-    u32 nContigs;         // num of contigs
+    u32 nContigs;         // num of contigs, 原contig被分成了多少个fragments
     u32 pad;
 };
 
@@ -72,6 +73,11 @@ struct contig
     u32 startCoord;       // local coordinate on the original contig
     u32 scaffId;
     u32 pad;
+
+    u32 get_original_contig_id() const 
+    {
+        return originalContigId % Max_Number_of_Contigs;
+    }
 };
 
 
@@ -87,6 +93,11 @@ struct contigs
 struct meta_data
 {
     u32 tags[64][16];
+
+    meta_data()
+    {
+        memset(tags, 0, sizeof(tags));
+    }
 };
 
 
@@ -97,8 +108,54 @@ struct map_state
     u32 *contigRelCoords = nullptr;   // local coordinate on the original contig [num_pixels_1d]
     u32 *scaffIds = nullptr;          // [num_pixels_1d]
     u64 *metaDataFlags = nullptr;     // [num_pixels_1d], 256kb for 32768 pixels
+
+    u32 get_original_contig_id(u32 pixel) const
+    {
+        return originalContigIds[pixel] % Max_Number_of_Contigs;
+    }
+
+    void restore_cutted_contigs_all(const u32& num_pixel_1d)
+    {
+        for (u32 i = 0; i < num_pixel_1d; i++)
+        {
+            originalContigIds[i] = originalContigIds[i] % Max_Number_of_Contigs;
+        }
+    }
+
+    void restore_cutted_contigs(const s32 start_pixel, const s32 end_pixel)
+    {   
+        if (start_pixel < 0 || end_pixel < 0) return;
+        for (u32 i = start_pixel; i <= end_pixel; i++)
+        {
+            originalContigIds[i] = originalContigIds[i] % Max_Number_of_Contigs;
+        }
+    }
 };
 
+
+/*
+用于存储计算得到的pixel_density值
+*/
+struct Extension_Graph_Data
+{   
+    bool is_prepared = false;
+    f32* data=nullptr;
+    Extension_Graph_Data(u32 num_pixel_1d) 
+    {
+        data = new f32[num_pixel_1d];
+        memset(data, 0, num_pixel_1d * sizeof(f32));
+    }
+
+    ~Extension_Graph_Data()
+    {
+        if (data)
+        {
+            delete[] data;
+            data = nullptr;
+        }
+    }
+    
+};
 
 
 // extension structures
@@ -142,6 +199,36 @@ extension_sentinel
 {
     extension_node *head = nullptr;  // point the first node
     extension_node *tail = nullptr;  // point the last node
+
+    u32 get_num_extensions()
+    {
+        u32 added_index = 0;
+        TraverseLinkedList(this->head, extension_node)
+        {
+            added_index++;
+        }
+        return added_index;
+    }
+
+    bool is_empty()
+    {
+        return this->head == nullptr;
+    }
+
+    bool is_graph_name_exist(const std::string& name)
+    {
+        TraverseLinkedList(this->head, extension_node)
+        {
+            if (node->type == extension_graph)
+            {
+                if (strcmp((char*)((graph*)node->extension)->name, name.c_str()) == 0)
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 };
 
 

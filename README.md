@@ -12,7 +12,7 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 - `right mouse button`: holding down and move to drag the Hi-C figure move within the window. 
 - `Mouse scroll` to zoom. A three button mouse is recomended.
 - `E`: enter the Edit mode.
-- `K`: enter the Select sort area mode.
+- `F`: enter the Select sort area mode.
 - `M`: enter the Meta Tag edit mode.
 - `S`: enter the Scaffold painting mode.
 - `X`: enter the extension edit mode.
@@ -48,36 +48,50 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 Enter scaffolding mode with the 's' key.
 - Use the GUI to see a list of scaffolds.
 
-## Select sort area model (`K`)
+## Select sort area mode (`F`)
 
-After click `YaHS sort` button in the main UI, it will defaultly run sort globally. If enter the the `select sort area mode`(by pressing `K`), it can sort only the selected area with pressing `Space` after selecting at least 3 contigs. 
+After click `Pixel Sort` button in the main UI, it will defaultly run sort globally. If enter the the `select sort area mode`(by pressing `F`), it can sort only the selected area with pressing `Space` after selecting at least 2 contigs. 
 
-Enter the select sort area mode by pressing `K`.
+Enter the select sort area mode by pressing `F`.
 - `Left mouse click`: select / un-select area for sorting.
 - `S`: clear all the select area.
-- `Space`: call `YaHS sort` to sort the select area **(NOTE: only work if select at least 3 fragments)**.
+- `Space`: call `Pixel Sort` to sort the select area **(NOTE: only work if select at least 3 fragments)**.
 - `Q/W`: quit/redo edit (currently will change the edit made globally not only the edit made within the selected area, so use this with caution as it can change also other parts)
+- `C`: cut the scaffolds/contigs within the selected area.
+- `Z`: glue the splitted fragments within the selected area. (NOTE: only link the continuous fragments.)
 
 ## Sort fragments according to link score
 
 Usage, first endter the main GUI: 
-- **Right click** the `YaHS Sort` button to open sort settings, 
+- **Right click** the `Pixel Sort` button to open sort settings, 
   - `Smallest Frag Size (pixels)` (defaul: 2) which represents the smallest fragment size in unit of pixels to consider during the sorting
   -  `Link Score Threshold`: $S_{thresh}$ (defaul: 0.4).
   -  Select the sort mode: 
      -  `UnionFind`: sort all links higher than $S_{thresh}$ and then traverse all the links by from high to low. 
      -  `Fuse`: traverse all links and fuse two chains.
-- **Left click** the `YaHS Sort` button: run.
+- **Left click** the `Pixel Sort` button: run.
 - **Redo all edits**
 - **Erase all edits**
+
+## `Pixel Cut` according to the continuity of HiC density
+Usage:
+In the main GUI:
+  - **Right click** the `Pixel Cut` button to open cut settings,
+    - `Cut threshold`: the smaller, the more likely to break one contig at the discontinuous locations.
+    - `Pixel_mean window size`: length of range from diagonl line, which is considered to calculate the HiC density.
+    - `Smallest frag size`: the smallest fragment length that can be generated.
+  - **Left click** the `Pixel Cut` button: cut all the scaffolds/contigs globally.
+
+
+
 
 ## User Profile
 
 Click the `User Profile` button in main GUI.
 
-<img src="doc/image.png" alt="" width="600">
+<img src="doc/image_user_profile.png" alt="" width="600">
 
-Set the `Meta tags`, `Background Color`, `Color Map`(HiC figure), `Extension settings`.
+Set the `Meta tags`, `Background Color`, `Color Map`(HiC figure), `Extension settings` and the `Colour Selected Area`.
 
 
 # Saving
@@ -120,6 +134,7 @@ PretextView uses the following third-party libraries:
 * [stb_sprintf](https://github.com/nothings/stb/blob/master/stb_sprintf.h)
 * Fonts from the 'Droid Serif' font set
 * [Icons from open-iconic](https://github.com/iconic/open-iconic)
+* [fmt](https://github.com/fmtlib/fmt)
 
 # Installation 
 
@@ -151,7 +166,7 @@ to remove the **quarantine** and then unmount and re-mount the dmg file. And the
 
 The score between two fragments represents the level of continuity. The higher score the better continuity.
 
-The link score calculation method refers to [YaHS](https://github.com/c-zhou/yahs). Thus, we call this function as **YaHS Sort**.
+The link score calculation method refers to [YaHS](https://github.com/c-zhou/yahs). 
 
 Reference: Chenxi Zhou, Shane A McCarthy, Richard Durbin, YaHS: yet another Hi-C scaffolding tool,
 Bioinformatics, Volume 39, Issue 1, January 2023, btac808, https://doi.org/10.1093/bioinformatics/btac808

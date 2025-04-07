@@ -23,7 +23,8 @@ SOFTWARE.
 
 #include "copy_texture.h"
 #include "shaderSource.h"
-
+#include "utilsPretextView.h"
+#include "cmath"
 
 
 Show_State::Show_State()
@@ -38,13 +39,19 @@ Show_State::Show_State()
 Show_State::~Show_State() {}
 
 
-void get_linear_mask(f32* linear_array, u32 length)
-{
+void get_linear_mask(std::vector<f32>& linear_array)
+{   
+    u32 length = linear_array.size();
+    if (length < 2)
+    {
+        fmt::print(stderr, "Error: link score calculation: length({}) < 2\n", length);
+        assert(0);
+    }
     for (u32 i = 0; i < length; i++)
     {
-        linear_array[i] = 1.0f - (f32)i / (f32)length;
+        linear_array[i] = std::sqrt(1.0f / (f32)(i+1)) ;
     }
-    f32 sum = std::accumulate(linear_array, linear_array+length, 0.0f);
+    f32 sum = std::accumulate(linear_array.data(), linear_array.data()+length, 0.0f);
     for (int i  = 0 ; i < length; i++)
     {
         linear_array[i] /= sum;
@@ -121,23 +128,17 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
 
 
 TexturesArray4AI::TexturesArray4AI(
-    u32 num_textures_1d_, u32 texture_resolution_, char* fileName, const contigs* Contigs)
+    u32 num_textures_1d_, 
+    u32 texture_resolution_, 
+    char* fileName, 
+    const contigs* Contigs)
     :num_textures_1d(num_textures_1d_), texture_resolution(texture_resolution_),
     is_copied_from_buffer(false), is_compressed(false), hic_shader_initilised(false)
 {   
     
-    MY_CHECK(0);
-
     this->frags = new Frag4compress(Contigs);
 
-    MY_CHECK(0);
-    this->compressed_hic = new Matrix3D<f32>(1, 1, 5);  // initialize the compressed_hic with 1x1x5
-
-    MY_CHECK(0);
     this->compressed_extensions = new CompressedExtensions(1); // initialize the compressed_extensions with 1
-
-
-    MY_CHECK(0);
 
     char* tmp = fileName;
     while (*tmp != '\0' && *tmp != '.') 
@@ -154,30 +155,10 @@ TexturesArray4AI::TexturesArray4AI(
     }
     this->texture_resolution_exp = (u32)std::log2(this->texture_resolution);
     this->total_num_textures = ((1 + this->num_textures_1d) * this->num_textures_1d ) >> 1;
-    this->textures = new u08*[this->total_num_textures];
-    try
-    {
-        for (u32 i = 0; i < this->total_num_textures; i++)
-        {
-            this->textures[i] = new u08[this->texture_resolution * this->texture_resolution];
-        }
-    }
-    catch(const std::exception& e)
-    {   
-        for (u32 i = 0; i < this->total_num_textures; i++)
-        {
-            if (this->textures[i])
-            {
-                delete[] this->textures[i];
-                this->textures[i] = nullptr;
-            }
-        }
-        delete[] this->textures;
-        this->textures = nullptr;
-        std::cerr << e.what() << " Allocate mem error\n";
-        assert(0);
-    }
-    MY_CHECK(0);
+    
+    // 此处不再为copy textures申请空间，因为耗费太多内存
+    // this->initialise_textures();
+
     // Shader setup and texture binding
     this->shaderProgram = CreateShader(FragmentSource_copyTexture.c_str(), VertexSource_copyTexture.c_str());
 
@@ -216,21 +197,56 @@ TexturesArray4AI::TexturesArray4AI(
 }
 
 
+void TexturesArray4AI::initialise_textures()
+{   
+    if (this->textures) this->clear_textures();
+    this->textures = new u08*[this->total_num_textures];
+    try
+    {
+        for (u32 i = 0; i < this->total_num_textures; i++)
+        {
+            this->textures[i] = new u08[this->texture_resolution * this->texture_resolution];
+        }
+    }
+    catch(const std::exception& e)
+    {   
+        this->clear_textures();
+        std::cerr << e.what() << " Allocate mem error\n";
+        assert(0);
+    }
+}
+
+void TexturesArray4AI::clear_textures()
+{
+    for (u32 i = 0; i < this->total_num_textures; i++)
+    {
+        if (this->textures && this->textures[i])
+        {
+            delete[] this->textures[i];
+            this->textures[i] = nullptr;
+        }
+    }
+    delete[] this->textures;
+    this->textures = nullptr;
+    is_copied_from_buffer = false;
+}
+
+
+void TexturesArray4AI::clear_compressed_hic()
+{
+    if (this->compressed_hic)
+    {
+        delete this->compressed_hic;
+        this->compressed_hic = nullptr;
+    }
+    return;
+}
+
+
 TexturesArray4AI::~TexturesArray4AI()
 {   
-    if (textures)
-    {
-        for (u32 i = 0; i < total_num_textures; i++)
-        {
-            if (textures[i]) 
-            {
-                delete[] textures[i];
-                textures[i] = nullptr;
-            }
-        }
-        delete[] textures;
-        textures = nullptr;
-    }
+    this->clear_textures();
+    this->clear_compressed_hic();
 
     if (frags)
     {
@@ -238,12 +254,6 @@ TexturesArray4AI::~TexturesArray4AI()
         frags = nullptr;
     }
     
-    if (compressed_hic)
-    {
-        delete compressed_hic;
-        compressed_hic = nullptr;
-    }
-
     if (compressed_extensions)
     {
         delete compressed_extensions;
@@ -265,12 +275,31 @@ TexturesArray4AI::~TexturesArray4AI()
     }
 }
 
-
+/* 
+*/
 u08 TexturesArray4AI::operator()(u32 row, u32 column) const
 {   
     if (row>=num_pixels_1d || column>=num_pixels_1d) 
-    {
-        printf("Index [%d, %d] is out of range [%d, %d]\n", row, column, num_pixels_1d - 1, num_pixels_1d - 1);
+    {   
+        fmt::print(
+            stderr,
+            "Index [{}, {}] is out of range [{}, {}], File:{}, line:{}\n", 
+            row, 
+            column, 
+            num_pixels_1d - 1, 
+            num_pixels_1d - 1,
+            __FILE__,
+            __LINE__
+        );
+        assert(0);
+    }
+    if (!this->textures) 
+    {   
+        char buff[512];
+        snprintf(buff, sizeof(buff), "TexturesArray4AI is not initialized, "
+            "please first copy the buffer textures to this->textures[], "
+            "row: %d, column: %d\n", row, column);
+        MY_CHECK(buff);
         assert(0);
     }
     if (row>column) std::swap(row, column);
@@ -309,14 +338,20 @@ void TexturesArray4AI::check_copied_from_buffer() const
     return ;
 }
 
+/* 
+复制没有经过re-order的buffer到 this->textures 中
+其实就是存储在.pretext 文件中的textures
+*/
 void TexturesArray4AI::copy_buffer_to_textures(
     const contact_matrix *contact_matrix_, 
     bool show_flag) 
 {   
 
+    this->initialise_textures(); // 申请空间 textures
+
     const GLuint &contact_matrix_textures = contact_matrix_->textures;
     if (is_copied_from_buffer) return;
-    MY_CHECK(0);
+    
     // Temporary texture setup
     GLuint temptexture;
     glGenTextures(1, &temptexture);
@@ -326,7 +361,7 @@ void TexturesArray4AI::copy_buffer_to_textures(
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    MY_CHECK(0);
+    
 
     GLuint framebuffer;
     glGenFramebuffers(1, &framebuffer);
@@ -337,8 +372,6 @@ void TexturesArray4AI::copy_buffer_to_textures(
         std::cerr << "Framebuffer is not complete!" << std::endl;
         assert(0);
     }
-
-    MY_CHECK(0);
 
     s32 orignal_viewport[4];
     glGetIntegerv(GL_VIEWPORT, orignal_viewport);
@@ -390,14 +423,16 @@ void TexturesArray4AI::copy_buffer_to_textures(
 }
 
 
-
+/*
+这个会把操作修改后的像素拷贝到 this->textures 中
+*/
 void TexturesArray4AI::copy_buffer_to_textures_dynamic(
     const contact_matrix *contact_matrix_, 
     bool show_flag) 
 {
 
-    MY_CHECK(0);
-    // Temporary texture setup
+    this->initialise_textures(); // 申请空间textures
+
     GLuint temptexture;
     glGenTextures(1, &temptexture);
     glBindTexture(GL_TEXTURE_2D, temptexture);
@@ -416,12 +451,9 @@ void TexturesArray4AI::copy_buffer_to_textures_dynamic(
         assert(0);
     }
 
-    MY_CHECK(0);
-
     s32 orignal_viewport[4];
     glGetIntegerv(GL_VIEWPORT, orignal_viewport);
 
-    // TODO (shaoheng): the shader is using all 4 channels but readpixel only the red channel
     auto model = glm::mat4(1.0f);
     glUseProgram(contact_matrix_->shaderProgram);
     glUniformMatrix4fv(contact_matrix_->matLocation, 1, GL_FALSE, glm::value_ptr(model));
@@ -436,8 +468,8 @@ void TexturesArray4AI::copy_buffer_to_textures_dynamic(
                 ptr_cnt++;
                 continue;
             }
-            // GLcall(glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer));
-            GLcall(glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0));
+            GLcall(glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer));
+            // GLcall(glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0));
             GLcall(glViewport(0, 0, texture_resolution, texture_resolution));
             GLcall(glClearColor(0.3f, 0.3f, 0.3f, 1.0f));
             GLcall(glClear(GL_COLOR_BUFFER_BIT));
@@ -449,12 +481,11 @@ void TexturesArray4AI::copy_buffer_to_textures_dynamic(
             // GLcall(glBindVertexArray(this->vao));
             // GLcall(glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0));
 
-            glBindTexture(GL_TEXTURE_2D_ARRAY, contact_matrix_->textures);
             GLcall(glBindVertexArray(contact_matrix_->vaos[ptr_cnt])); 
             GLcall(glDrawRangeElements(GL_TRIANGLES, 0, 3, 6, GL_UNSIGNED_SHORT, NULL));
 
             // GLcall( glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer));
-            GLcall( glBindFramebuffer(GL_READ_FRAMEBUFFER, 0));
+            // GLcall( glBindFramebuffer(GL_READ_FRAMEBUFFER, 0));
             GLcall(glReadPixels(0, 0, texture_resolution, texture_resolution, GL_RED, GL_UNSIGNED_BYTE, textures[layer_cnt]));
             if ((layer_cnt + 1) % (total_num_textures / 100) == 0)
             {
@@ -491,6 +522,55 @@ void TexturesArray4AI::copy_buffer_to_textures_dynamic(
     return ;
 }
 
+/*
+存储一个matrix然后 rearrange
+
+目前没有这样做，因为需要存两个textures... 目前还是从opengl的buffer往外copy
+*/
+void TexturesArray4AI::rearrange_textures(const u32* rearrange_index)
+{
+    if (!is_copied_from_buffer || this->textures == nullptr) 
+    {
+        std::cerr << "TexturesArray4AI is not initialized, "
+            "please first copy the buffer textures to this->textures[], "
+            << std::endl;
+        assert(0);
+    }
+    u08** new_textures = new u08*[total_num_textures];
+    for (u32 i = 0; i < total_num_textures; i++)
+    {
+        new_textures[i] = new u08[texture_resolution * texture_resolution];
+    }
+    u32 texture_id = 0, row_in_texture = 0, column_in_texture = 0, 
+        row_re = 0, column_re =0,
+        texture_id_re = 0, row_in_texture_re = 0, column_in_texture_re = 0;
+
+    for (u32 row = 0; row < num_pixels_1d; row++)
+    {
+        for (u32 column = 0; column < num_pixels_1d; column++)
+        {   
+            /* 
+            id= texture_id_cal(row>>texture_resolution_exp, column>>texture_resolution_exp, num_textures_1d)
+            row_in_texture = row & ((1<<texture_resolution_exp) - 1)
+            colomn_in_texture = column & ((1<<texture_resolution_exp) - 1)
+            */
+            texture_id = texture_id_cal(row>>texture_resolution_exp, column>>texture_resolution_exp, num_textures_1d);
+            row_in_texture = row & ((1<<texture_resolution_exp) - 1);
+            column_in_texture = column & ((1<<texture_resolution_exp) - 1);
+
+            row_re = rearrange_index[row];
+            column_re = rearrange_index[column];
+            texture_id_re = texture_id_cal(row_re>>texture_resolution_exp, column_re>>texture_resolution_exp, num_textures_1d);
+            row_in_texture_re = row_re & ((1<<texture_resolution_exp) - 1);
+            column_in_texture_re = column_re & ((1<<texture_resolution_exp) - 1);
+            new_textures[texture_id][row_in_texture * texture_resolution + column_in_texture] = textures[texture_id_re][row_in_texture_re * texture_resolution + column_in_texture_re];
+        }
+    }
+    clear_textures();
+    is_copied_from_buffer = true;
+    textures = new_textures;
+    return ;
+}
 
 
 void TexturesArray4AI::prepare_tmp_texture2d_array(GLuint& tmp_texture2d_array)
@@ -625,7 +705,7 @@ void TexturesArray4AI::show_collected_texture()
 void TexturesArray4AI::show_collected_textures()
 {
     GLuint tmp_texture2d_array;
-    prepare_tmp_texture2d_array(tmp_texture2d_array);
+    this->prepare_tmp_texture2d_array(tmp_texture2d_array);
     
     GLFWwindow* window = glfwGetCurrentContext();
     if(!window) assert(0);
@@ -667,13 +747,13 @@ void TexturesArray4AI::show_collected_textures()
     glfwSetCursorPosCallback(window, cursor_position_callback);
     glUseProgram(shaderProgram);
     GLcall(glUniform1i(glGetUniformLocation(shaderProgram, "texArray"), 0));
-    glm::mat4 model_not_flipped = glm::scale(
+    glm::mat4 model_not_flipped = glm::scale( // 控制显示大小
         glm::mat4(1.0f), 
         glm::vec3(
             1.0f/(f32)num_textures_1d, 
             -1.0f/(f32)num_textures_1d, // flipped on y axis 
             1.0f));
-    glm::mat4 model_flipped = glm::scale(
+    glm::mat4 model_flipped = glm::scale( // 控制显示大小
         glm::rotate(model_not_flipped, glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f)), 
         glm::vec3(1.0f, -1.0f, 1.0f));
     while (!glfwWindowShouldClose(window))
@@ -689,20 +769,20 @@ void TexturesArray4AI::show_collected_textures()
 
         glBindVertexArray(vao);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo);
-        glm::mat4 projection = glm::ortho(
+        glm::mat4 projection = glm::ortho( // 控制镜头远近
             -1.0f * ratio_w_h * show_state.zoomlevel, 1.0f * ratio_w_h * show_state.zoomlevel, 
             -1.0f * show_state.zoomlevel, 1.0f * show_state.zoomlevel, 
             -1.0f, 1.0f);
         
         glm::mat4 model_tmp;
-        for (int row = 0; row < num_textures_1d; row++ )
+        for (int row = 0; row < num_textures_1d; row++ )// 显示所有的 tile
         {
             for (int column = 0; column < num_textures_1d; column ++ )
             {   
                 // if (row > column) continue;
                 u32 layer = texture_id_cal((u32)row, (u32)column, num_textures_1d);
                 GLcall(glUniform1i(glGetUniformLocation(shaderProgram, "layer"), (int)layer));
-                model_tmp =  glm::translate(
+                model_tmp =  glm::translate( // 控制显示位置
                     glm::mat4(1.0f), 
                     glm::vec3( 
                         -1.0f + ((f32)column + 0.5f) * 2.0f / (f32)num_textures_1d + show_state.translationOffset.x,
@@ -768,6 +848,37 @@ void TexturesArray4AI::show_collected_textures()
 }
 
 
+
+void TexturesArray4AI::cal_maximum_number_of_shift(
+    u32& D,
+    std::vector<f32>& norm_diag_mean,
+    const contigs* Contigs,
+    f32 D_hic_ratio,
+    u32 maximum_D,
+    f32 min_hic_density)
+{   
+    f32 global_shift0_diag_mean = this->cal_diagonal_mean_within_fragments(D, Contigs);
+    norm_diag_mean.push_back(global_shift0_diag_mean);
+    f32 tmp_diag_mean = this->cal_diagonal_mean_within_fragments(++D, Contigs);
+    while (
+        tmp_diag_mean > min_hic_density && 
+        tmp_diag_mean > D_hic_ratio * global_shift0_diag_mean && 
+        D < maximum_D
+    ) {
+        norm_diag_mean.push_back(tmp_diag_mean);
+        tmp_diag_mean = this->cal_diagonal_mean_within_fragments(++D, Contigs); 
+    }
+
+    if (D < 2)
+    {
+        fmt::print(stderr, 
+            "Warning: D is less than 2, please check the Contigs of this sample.\n");
+        assert(0);
+    }
+    return ;
+}
+
+
 void TexturesArray4AI::cal_compressed_hic(
     const contigs* Contigs, 
     const extension_sentinel& Extensions,
@@ -783,14 +894,32 @@ void TexturesArray4AI::cal_compressed_hic(
     u08 using_select_area = (select_area != nullptr && select_area->select_flag)?1:0;
     // clean the memory of compressed_hic_mx
     frags->re_allocate_mem(Contigs, select_area);
-    if (frags->total_length != (using_select_area? (select_area->end_pixel - select_area->start_pixel + 1): num_pixels_1d))
-    {
-        fprintf(stderr, "\n[Compress Hic] warning: frags->total_length(%d) != num_pixels_1d (%d) (%s).\n\n", frags->total_length, (using_select_area? (select_area->end_pixel - select_area->start_pixel + 1): num_pixels_1d), (using_select_area?"selected area":"full area"));
+    if (frags->total_length != (using_select_area ? select_area->get_selected_len(Contigs) : num_pixels_1d))
+    {   
+        fmt::print(
+            "\n[Compress Hic] warning: frags->total_length({}) != num_pixels_1d ({}) ({}). file:{}, line:{}\n\n",
+            frags->total_length,
+            (using_select_area? (select_area->end_pixel - select_area->start_pixel + 1): num_pixels_1d),
+            (using_select_area?"selected area":"full area"),
+            __FILE__,
+            __LINE__    
+        );
+        assert(0);
     }
-    compressed_hic->re_allocate_mem(
-        frags->num, 
-        frags->num, 
-        5);
+    if (compressed_hic)
+    {
+        compressed_hic->re_allocate_mem(
+            frags->num, 
+            frags->num, 
+            5);
+    }
+    else 
+    {
+        compressed_hic = new Matrix3D<f32>(
+            frags->num, 
+            frags->num, 
+            5);
+    }
     if (mass_centres) 
     {
         delete mass_centres;
@@ -848,18 +977,15 @@ void TexturesArray4AI::cal_compressed_hic(
     }
 
     // cal the maximum number of shift
-    u32 D = 0;
-    f32 global_shift0_diag_mean = cal_diagonal_mean_within_fragments(D, Contigs);
-    std::vector<f32> norm_diag_mean = {global_shift0_diag_mean};
-    f32 tmp_diag_mean = cal_diagonal_mean_within_fragments(++D, Contigs);
-    while (
-        tmp_diag_mean > min_hic_density && 
-        tmp_diag_mean > D_hic_ratio * global_shift0_diag_mean && 
-        D < maximum_D
-    ) {
-        norm_diag_mean.push_back(tmp_diag_mean);
-        tmp_diag_mean = cal_diagonal_mean_within_fragments(++D, Contigs); 
-    }
+    u32 D=0;
+    std::vector<f32> norm_diag_mean = {};
+    this->cal_maximum_number_of_shift(
+        D, 
+        norm_diag_mean,
+        Contigs,
+        D_hic_ratio,
+        maximum_D,
+        min_hic_density);
 
     Values_on_Channel buffer_values_on_channel;
     u32 cnt = 0;
@@ -867,13 +993,14 @@ void TexturesArray4AI::cal_compressed_hic(
     {
         for (u32 j = i+1; j < frags->num; j++)
         {   
-            get_interaction_score(
+            this->get_interaction_score(
                     frags->startCoord[i], 
                     frags->startCoord[j], 
                     frags->length[i], 
                     frags->length[j], 
                     D,
-                    norm_diag_mean, buffer_values_on_channel);
+                    norm_diag_mean, 
+                    buffer_values_on_channel);
             for (u32 channel = 0; channel < 4 ; channel ++ )
             {
                 (*compressed_hic)(i, j, channel) = (*compressed_hic)(j, i, Switch_Channel_Symetric[channel]) = buffer_values_on_channel.c[channel];
@@ -902,7 +1029,7 @@ f32 TexturesArray4AI::cal_diagonal_mean_within_fragments(int shift, const contig
     for (int i = 0 ; i < Contigs->numberOfContigs; i ++ )
     {   
         maxlen = std::max(maxlen, Contigs->contigs_arr[i].length);
-        Sum_and_Number tmp = get_fragement_diag_mean_square( 
+        Sum_and_Number tmp = this->get_fragement_diag_mean_square( 
             start_coord, 
             Contigs->contigs_arr[i].length, 
             shift );
@@ -917,7 +1044,9 @@ f32 TexturesArray4AI::cal_diagonal_mean_within_fragments(int shift, const contig
     return (f32)sum / (f32)std::max(cnt, 1u);
 }
 
-
+/* todo 
+windows： 编译错误，尝试访问 d 
+*/
 void TexturesArray4AI::get_interaction_score(
     const u32& row, 
     const u32& column, 
@@ -937,8 +1066,11 @@ void TexturesArray4AI::get_interaction_score(
         };
 
     u32 number_of_scores = std::min(D-1, std::max(num_row, num_column));
-    f32* linear_weight = new f32[number_of_scores]; 
-    get_linear_mask(linear_weight, number_of_scores);  // assign the linear weight mask
+    u32 len_of_weight_mask = std::min(D-1, (u32)(number_of_scores + 5) );  // 往外多算几个像素点，因此小的片段的link score分就会相对下降, 特别是很小的片段
+    // f32 linear_weight[number_of_scores]; 
+    // get_linear_mask(linear_weight, number_of_scores);  // assign the linear weight mask
+    std::vector<f32> linear_weight(len_of_weight_mask, 0.f);
+    get_linear_mask(linear_weight ); 
 
     buffer_values_on_channel.initilize();
     for (int channel = 0; channel < 4; channel++)
@@ -952,7 +1084,7 @@ void TexturesArray4AI::get_interaction_score(
             buffer_values_on_channel.c[channel] += linear_weight[shift-1] * score_cal(tmp_mean, shift);
         }
     }
-    delete[] linear_weight;
+    // delete[] linear_weight;
     return ;
 }
 
@@ -1157,7 +1289,7 @@ Sum_and_Number TexturesArray4AI::get_fragement_diag_mean_square(
         std::cerr << "The shift is less than 0" << std::endl;
         assert(0);
     }
-    check_copied_from_buffer();
+    this->check_copied_from_buffer();
     if (shift >= length)
     {
         return {0, 0};

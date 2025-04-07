@@ -1,10 +1,12 @@
 cmake_minimum_required(VERSION 3.17)
-project(PretextView VERSION "1.0.1")
+project(PretextView VERSION "1.0.3")
 
 
-option(FORCE_MAC_X86 "Force macOS x86_64 build" OFF)  
+option(FORCE_MAC_X86 "Force macOS x86_64 build" OFF)
 option(BUILD_UNIVERSAL "Build macOS universal binary" OFF) 
 option(WITH_TORCH "Find and link torch lib" OFF)
+option(DEBUG_OUTPUT_LIKELIHOOD_TABLE "Output likelihood table to file" OFF)
+option(DEBUG_OUTPUT_PIXEL_CUT_FILE "Output the pixel cut files" OFF)
 
 set(CMAKE_C_STANDARD 17)   
 set(CMAKE_CXX_STANDARD 17)   
@@ -14,7 +16,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(target_name PretextViewAI)
 
 if (APPLE)
-
     if(FORCE_MAC_X86) 
         message(STATUS "Forcing x86_64 architecture build")
         set(CMAKE_OSX_ARCHITECTURES "x86_64" CACHE STRING "Build architectures" FORCE)
@@ -55,6 +56,9 @@ else()
     endif()
 endif()
 
+if (MSVC)
+    add_compile_options(/utf-8)  # force MSVC to use UTF-8 
+endif()
 
 message(STATUS "Install path: ${CMAKE_INSTALL_PREFIX}")
 
@@ -76,10 +80,25 @@ include_directories(
     subprojects/glfw/include
     subprojects/libdeflate
     subprojects/glm
+    subprojects/fmt/include
 )
 
 add_subdirectory(subprojects/glfw)
 add_subdirectory(subprojects/glm)
+
+find_library(
+    lib_fmt
+    NAMES fmt libfmt
+    PATHS 
+        subprojects/fmt/build 
+        subprojects/fmt/build/debug 
+        subprojects/fmt/build/Release
+        subprojects/fmt/build/release)
+if(NOT lib_fmt)
+    message(FATAL_ERROR "lib_fmt not found")
+else()
+    message(STATUS "lib_fmt found: ${lib_fmt}")
+endif()
 
 
 find_library(
@@ -96,6 +115,9 @@ else()
     message(STATUS "lib_deflate_static found: ${lib_deflate_static}")
 endif()
 
+add_library(lib_yahs STATIC 
+    src/yahs_sort.cpp
+)
 
 # set(CMAKE_PREFIX_PATH "subprojects/libtorch/share/cmake/Torch")
 if (WITH_TORCH)
@@ -111,14 +133,16 @@ if (WITH_TORCH)
     target_link_libraries(
         sortlib PUBLIC 
         ${TORCH_LIBRARIES} 
-        ${torchscatter})
+        ${torchscatter} 
+        lib_yahs)
 else()
     message(STATUS "Libtorch: Build without libtorch")
     add_library(sortlib STATIC src/frag_sort.cpp )
+    target_link_libraries(sortlib PRIVATE lib_yahs)
 endif()
 
 
-add_library(glad STATIC glad.c)
+add_library(glad STATIC src/glad.c)
 add_library(utilsPretextView STATIC src/utilsPretextView.cpp)
 add_library(copy_texture STATIC src/copy_texture.cpp)
 # target_link_libraries(copy_texture PRIVATE Eigen3::Eigen)
@@ -141,6 +165,7 @@ else()
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/Info.plist"
     )
 endif()
+
 target_compile_definitions(${target_name} PRIVATE PV=${PROJECT_VERSION})
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(${target_name} PRIVATE DEBUG)
@@ -149,9 +174,15 @@ if (CMAKE_BUILD_TYPE STREQUAL "Debug")
 else()
     message(STATUS "Release version: flag (${CMAKE_BUILD_TYPE}) without DEBUG")
 endif()
+if (DEBUG_OUTPUT_LIKELIHOOD_TABLE)
+    message(STATUS "Debug version: flag (${CMAKE_BUILD_TYPE}) with DEBUG_OUTPUT_LIKELIHOOD_TABLE")
+    target_compile_definitions(${target_name} PRIVATE DEBUG_OUTPUT_LIKELIHOOD_TABLE)
+endif()
+
 target_link_libraries(
     ${target_name} PRIVATE 
     ${lib_deflate_static} 
+    ${lib_fmt}
     sortlib 
     glm 
     glad 
@@ -159,6 +190,7 @@ target_link_libraries(
     copy_texture 
     imgui 
     glfw 
+    lib_yahs
 )   
 
 if (APPLE)

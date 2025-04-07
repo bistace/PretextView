@@ -99,11 +99,15 @@ SOFTWARE.
 #pragma clang diagnostic pop
 
 
-#include "Resources.cpp"
+#include "Resources.cpp" // defines icons, fonts
 
 #include "genomeData.h"
 #include "showWindowData.h"
-
+#include "hic_figure.h"
+#include "ai_cut_json_parse.h"
+#include "frag_cut_calculation.h"
+#include "grey_out_settings.h"
+#include "user_profile_settings.h"
 
 #include "shaderSource.h"
 /*
@@ -363,6 +367,16 @@ QuadTree_Data;
 #endif
 
 
+global_variable
+Extension_Graph_Data * pixel_density_extension = nullptr;
+
+global_variable
+TexturesArray4AI* textures_array_ptr = nullptr;
+
+global_variable
+FragCutCal* frag_cut_cal_ptr = nullptr;
+
+
 struct
     CustomColorMapOrder
 {
@@ -559,6 +573,10 @@ meta_mode_data *
 Extension_Mode_Data;
 
 
+/*
+用于显示在input sequences中点击后选中的片段的名字，
+显示label持续 5 秒钟
+*/
 struct selected_sequence_cover_countor
 {
     s32 original_contig_index;
@@ -657,10 +675,14 @@ Loading = 0;
 
 global_variable
 u32
-Yahs_sorting = 0;
+auto_sort_state = 0;
 
-global_variable s32 ai_sort_button = 0; 
-global_variable s32 yahs_sort_button = 0;
+global_variable
+u32 
+auto_cut_state = 0;
+
+global_variable s32 auto_cut_button = 0; 
+global_variable s32 auto_sort_button = 0;
 
 
 global_function
@@ -718,15 +740,13 @@ setContactMatrixVertexArray(contact_matrix* Contact_Matrix_, bool copy_flag=fals
 
 global_function
 void 
-prepare_before_copy(f32 *original_control_points);
+prepare_before_copy(f32 *original_color_control_points);
 
 
 global_function
 void 
-restore_settings_after_copy(const f32 *original_control_points);
+restore_settings_after_copy(const f32 *original_color_control_points);
 
-
-#define Max_Number_of_Contigs 4096
 
 
 global_variable
@@ -777,7 +797,9 @@ Default_Tags[] =
     "U",
     "B1",
     "B2",
-    "B3"
+    "B3", 
+    "FalseDuplicate",
+    "Primary"
 };
 
 
@@ -788,13 +810,13 @@ Map_State;
 
 #include "copy_texture.h"
 // define the struct to store the ai model mask
-std::unique_ptr<FragSortTool> frag_sort_method = nullptr;
+FragSortTool* frag_sort_method = new FragSortTool();
 global_variable auto auto_curation_state = AutoCurationState();
 
 
 global_function
 void
-UpdateContigsFromMapState()  // todo reading 从map的状态更新contigs
+UpdateContigsFromMapState()  //  reading 从map的状态更新contigs
 {
     u32 lastScaffID = Map_State->scaffIds[0];       // 第一个scaff的编号
     u32 scaffId = lastScaffID ? 1 : 0;              // 
@@ -816,13 +838,17 @@ UpdateContigsFromMapState()  // todo reading 从map的状态更新contigs
         ++length; // current fragment length
 
         pixelIdx = index + 1;   // 像素点编号， 加一因为第一个已经用来初始化了
-        u32 id = Map_State->originalContigIds[pixelIdx];  // 像素点的 contig id
+        u32 id = Map_State->originalContigIds[pixelIdx];  // 像素点的 original contig id, 这里 不使用 % Max_Number_of_Contigs的值是为了区分后面cut之后的片段
         u32 coord = Map_State->contigRelCoords[pixelIdx]; // 像素点的局部坐标
         
-        if (id != lastId || (inverted && coord != (lastCoord - 1)) || (!inverted && coord != (lastCoord + 1))) // 如果不是一个连续片段
+        if (
+            id != lastId || 
+            (inverted && coord != (lastCoord - 1)) || 
+            (!inverted && coord != (lastCoord + 1)) 
+        ) // 如果不是一个连续片段
         {   
-            Original_Contigs[lastId].contigMapPixels[Original_Contigs[lastId].nContigs] = pixelIdx - 1 - (length >> 1);   // update Original_Contigs: contigMapPixels
-            Original_Contigs[lastId].nContigs++; // update Original_Contigs: nContigs, contigMapPixels
+            Original_Contigs[lastId % Max_Number_of_Contigs].contigMapPixels[Original_Contigs[lastId%Max_Number_of_Contigs].nContigs] = pixelIdx - 1 - (length >> 1);   // update Original_Contigs: contigMapPixels
+            Original_Contigs[lastId % Max_Number_of_Contigs].nContigs++; // update Original_Contigs: nContigs, contigMapPixels
 
             contig *last_cont = Contigs->contigs_arr + contigPtr; // 获取上一个contig的指针， 并且给contigPtr + 1
             contigPtr++;
@@ -860,7 +886,7 @@ UpdateContigsFromMapState()  // todo reading 从map的状态更新contigs
     if (contigPtr < Max_Number_of_Contigs) //  contigptr 小于 Number_of_Original_Contigs
     // 更新最后一个contig的最后一个片段信息
     {
-        (Original_Contigs + lastId)->contigMapPixels[(Original_Contigs + lastId)->nContigs++] = pixelIdx - 1 - (length >> 1); 
+        (Original_Contigs + lastId % Max_Number_of_Contigs)->contigMapPixels[(Original_Contigs + lastId % Max_Number_of_Contigs)->nContigs++] = pixelIdx - 1 - (length >> 1); 
 
         ++length;
         contig *cont = Contigs->contigs_arr + contigPtr++;
@@ -896,7 +922,7 @@ RebuildContig(u32 pixel)
     for (;;)
     {
         u32 contigId = Map_State->contigIds[pixel];
-        u32 origContigId = Map_State->originalContigIds[pixel];
+        u32 origContigId = Map_State->get_original_contig_id(pixel);
 
         u32 top = (u32)pixel;
         while (top && (Map_State->contigIds[top - 1] == contigId)) --top;
@@ -914,7 +940,7 @@ RebuildContig(u32 pixel)
         u08 fragmented = 0;
         ForLoop(Number_of_Pixels_1D)
         {
-            if ((Map_State->contigIds[index] != contigId) && (Map_State->originalContigIds[index] == origContigId))
+            if ((Map_State->contigIds[index] != contigId) && (Map_State->get_original_contig_id(index) == origContigId))
             {
                 fragmented = 1;
                 break;
@@ -929,7 +955,7 @@ RebuildContig(u32 pixel)
                 u32 otherPixel = 0;
                 ForLoop(Number_of_Pixels_1D)
                 {
-                    if ((Map_State->originalContigIds[index] == origContigId) && (Map_State->contigRelCoords[index] == (contigTopCoord - 1)))
+                    if ((Map_State->get_original_contig_id(index) == origContigId) && (Map_State->contigRelCoords[index] == (contigTopCoord - 1)))
                     {
                         otherPixel = index;
                         break;
@@ -963,7 +989,7 @@ RebuildContig(u32 pixel)
                 u32 otherPixel = 0;
                 ForLoop(Number_of_Pixels_1D)
                 {
-                    if ((Map_State->originalContigIds[index] == origContigId) && (Map_State->contigRelCoords[index] == (contigBottomCoord + 1)))
+                    if ((Map_State->get_original_contig_id(index) == origContigId) && (Map_State->contigRelCoords[index] == (contigBottomCoord + 1)))
                     {
                         otherPixel = index;
                         break;
@@ -1627,7 +1653,7 @@ global_function
 void
 MouseMove(GLFWwindow* window, f64 x, f64 y)
 {
-    if (Loading || Yahs_sorting)
+    if (Loading || auto_sort_state || auto_cut_state)
     {
         return;
     }
@@ -1639,7 +1665,7 @@ MouseMove(GLFWwindow* window, f64 x, f64 y)
     if (UI_On)
     {
     }
-    else
+    else // ui_on == false
     {
         if (Edit_Mode)
         {
@@ -1664,24 +1690,51 @@ MouseMove(GLFWwindow* window, f64 x, f64 y)
 
             u32 pixel1 = (u32)((f64)nPixels * (0.5 + (f64)wx));
             u32 pixel2 = (u32)((f64)nPixels * (0.5 + (f64)wy));
+            
+            // 防止在尾部溢出
+            pixel1 = my_Max(0, my_Min(nPixels - 1, pixel1));
+            pixel2 = my_Max(0, my_Min(nPixels - 1, pixel2));
 
-            u32 contig = Map_State->contigIds[pixel1];
+            u32 contig = Map_State->contigIds[pixel1]; 
 
             if (!Edit_Pixels.editing && !Edit_Pixels.selecting && Map_State->contigIds[pixel2] != contig)
             {
                 u32 testPixel = pixel1;
                 u32 testContig = contig;
-                while (testContig == contig)
+                while (testContig == contig) // move testContig to the 1 before the first or 1 after the last pixel of the contig
                 {
-                    testContig = pixel1 < pixel2 ? Map_State->contigIds[++testPixel] : Map_State->contigIds[--testPixel];
+
+                    if (pixel1 < pixel2) 
+                    {
+                        testPixel ++ ;
+                    }
+                    else
+                    {
+                        testPixel -- ;
+                    }
+
+                    testContig = Map_State->contigIds[testPixel];
+
                     if (testPixel == 0 || testPixel >= (nPixels - 1)) break;
+
+                    // testContig = pixel1 < pixel2 ? Map_State->contigIds[++testPixel] : Map_State->contigIds[--testPixel];
+                    // if (testPixel == 0 || testPixel >= (nPixels - 1)) break;
+                }   
+                if (Map_State->contigIds[testPixel] == contig)
+                {
+                    pixel2 = testPixel;
                 }
-                pixel2 = pixel1 < pixel2 ? testPixel - 1 : testPixel + 1;
+                else
+                {
+                    pixel2 = pixel1 < pixel2 ? testPixel - 1 : testPixel + 1;
+                }
             }
+
             
-            if (Edit_Pixels.selecting)
+            if (Edit_Pixels.selecting) // select the contig
             {
-                Edit_Pixels.selectPixels.x = my_Max(pixel1, my_Max(Edit_Pixels.selectPixels.x, Edit_Pixels.selectPixels.y));
+                Edit_Pixels.selectPixels.x = my_Max(pixel1, my_Max(Edit_Pixels.selectPixels.x, Edit_Pixels.selectPixels.y)); // used to select multiple contigs with pressing space and dragging the mouse
+                // Edit_Pixels.selectPixels.x = pixel1;
                 while(  Edit_Pixels.selectPixels.x < (Number_of_Pixels_1D - 1) &&
                         ((Edit_Pixels.scaffSelecting && Map_State->scaffIds[Edit_Pixels.selectPixels.x] && Map_State->scaffIds[Edit_Pixels.selectPixels.x] == Map_State->scaffIds[1 + Edit_Pixels.selectPixels.x] ) || 
                           Map_State->contigIds[Edit_Pixels.selectPixels.x] == Map_State->contigIds[1 + Edit_Pixels.selectPixels.x]))
@@ -1690,6 +1743,7 @@ MouseMove(GLFWwindow* window, f64 x, f64 y)
                 }
 
                 Edit_Pixels.selectPixels.y = my_Min(pixel1, my_Min(Edit_Pixels.selectPixels.x, Edit_Pixels.selectPixels.y));
+                // Edit_Pixels.selectPixels.y = pixel1;
                 while(  Edit_Pixels.selectPixels.y > 0 &&
                         ((Edit_Pixels.scaffSelecting && Map_State->scaffIds[Edit_Pixels.selectPixels.y] && Map_State->scaffIds[Edit_Pixels.selectPixels.y] == Map_State->scaffIds[Edit_Pixels.selectPixels.y - 1]) || Map_State->contigIds[Edit_Pixels.selectPixels.y] == Map_State->contigIds[Edit_Pixels.selectPixels.y - 1]))
                 {
@@ -1733,7 +1787,7 @@ MouseMove(GLFWwindow* window, f64 x, f64 y)
                 Edit_Pixels.worldCoords.x = (f32)(((f64)((2 * Edit_Pixels.pixels.x) + 1)) / ((f64)(2 * nPixels))) - 0.5f;
                 Edit_Pixels.worldCoords.y = (f32)(((f64)((2 * Edit_Pixels.pixels.y) + 1)) / ((f64)(2 * nPixels))) - 0.5f;
             }
-            else
+            else  // edit_pixels.editing == 0
             {
                 if (netDelta || Global_Edit_Invert_Flag)
                 {
@@ -1928,15 +1982,16 @@ MouseMove(GLFWwindow* window, f64 x, f64 y)
     }
 }
 
-global_variable
-u08
-Mouse_Invert = 0;
-
 
 global_variable
 u08
 Grey_Haplotigs = 1;
 
+global_variable
+GreyOutSettings* Grey_Out_Settings = nullptr;
+
+global_variable
+UserProfileSettings* user_profile_settings_ptr = nullptr;
 
 global_variable
 u08
@@ -1946,10 +2001,10 @@ global_function
 void
 Mouse(GLFWwindow* window, s32 button, s32 action, s32 mods)
 {
-    s32 primaryMouse = Mouse_Invert ? GLFW_MOUSE_BUTTON_RIGHT : GLFW_MOUSE_BUTTON_LEFT;
-    s32 secondaryMouse = Mouse_Invert ? GLFW_MOUSE_BUTTON_LEFT : GLFW_MOUSE_BUTTON_RIGHT;    
+    s32 primaryMouse = user_profile_settings_ptr->invert_mouse ? GLFW_MOUSE_BUTTON_RIGHT : GLFW_MOUSE_BUTTON_LEFT;
+    s32 secondaryMouse = user_profile_settings_ptr->invert_mouse ? GLFW_MOUSE_BUTTON_LEFT : GLFW_MOUSE_BUTTON_RIGHT;    
     
-    if (Loading || Yahs_sorting)
+    if (Loading || auto_sort_state)
     {
         return;
     }
@@ -2079,7 +2134,7 @@ global_function
 void
 Scroll(GLFWwindow* window, f64 x, f64 y)
 {
-    if (Loading || Yahs_sorting)
+    if (Loading || auto_sort_state)
     {
         return;
     }
@@ -2733,7 +2788,7 @@ Render() {
     }
 
     // Text / UI Rendering
-    if (Contig_Name_Labels->on || Scale_Bars->on || Tool_Tip->on || UI_On || Loading || Yahs_sorting || Edit_Mode || Waypoint_Edit_Mode || Waypoints_Always_Visible || Scaff_Edit_Mode || Scaffs_Always_Visible || MetaData_Edit_Mode || MetaData_Always_Visible || graphNamesOn)
+    if (Contig_Name_Labels->on || Scale_Bars->on || Tool_Tip->on || UI_On || Loading || auto_sort_state || Edit_Mode || Waypoint_Edit_Mode || Waypoints_Always_Visible || Scaff_Edit_Mode || Scaffs_Always_Visible || MetaData_Edit_Mode || MetaData_Always_Visible || graphNamesOn)
     {
         f32 textNormalMat[16];
         f32 textRotMat[16];
@@ -2839,7 +2894,7 @@ Render() {
 
                 if (rightPixel > 0.0f && leftPixel < width)
                 {
-                    const char *name = (const char *)(Original_Contigs + cont->originalContigId)->name;
+                    const char *name = (const char *)(Original_Contigs + cont->get_original_contig_id())->name;
                     f32 x = (rightPixel + leftPixel) * 0.5f;
                     f32 y = my_Max(wy0, 0.0f) + 10.0f;
                     f32 textWidth = fonsTextBounds(FontStash_Context, x, y, name, 0, NULL);
@@ -2888,7 +2943,7 @@ Render() {
 
                 if (topPixel < height && bottomPixel > 0.0f)
                 {
-                    const char *name = (const char *)(Original_Contigs + cont->originalContigId)->name;
+                    const char *name = (const char *)(Original_Contigs + cont->get_original_contig_id())->name;
                     f32 y = (topPixel + bottomPixel) * 0.5f;
                     f32 x = my_Max(wx0, 0.0f) + 10.0f;
                     f32 textWidth = fonsTextBounds(FontStash_Context, x, y, name, 0, NULL);
@@ -3311,7 +3366,7 @@ Render() {
             }
         }
 
-        // label to show the selected sequence
+        // label to show the selected sequence 从 input sequences 里面选中的片段
         if (Selected_Sequence_Cover_Countor.end_time > 0.)
         {   
             f64 crt_time = GetTime();
@@ -3496,13 +3551,8 @@ Render() {
             f32 end_fraction   = (f32)auto_curation_state.get_end()  /(f32)Number_of_Pixels_1D;
 
             // selected frags into a string
-            std::vector<u32> selected_frag_ids;
-            auto_curation_state.get_selected_fragments(selected_frag_ids, Map_State, Number_of_Pixels_1D);
-            std::stringstream ss;
-            if (selected_frag_ids.size() > 0) ss << selected_frag_ids[0];
-            for (u32 i = 1; i < selected_frag_ids.size(); i++) ss <<", " << selected_frag_ids[i] ;
-            std::string selectedFragmentsStr = "Selected fragments number: " + std::to_string(selected_frag_ids.size());
-            std::string start_and_end_pixel_str = "Select range: " + std::to_string(auto_curation_state.get_start()) + " - " + std::to_string(auto_curation_state.get_end());
+            SelectArea select_area;
+            auto_curation_state.get_selected_fragments(select_area, Map_State, Number_of_Pixels_1D, Contigs);
 
             { // draw the help text in the bottom right corner
                 fonsSetFont(FontStash_Context, Font_Bold);
@@ -3510,23 +3560,26 @@ Render() {
                 fonsVertMetrics(FontStash_Context, 0, 0, &lh);
                 fonsSetColor(FontStash_Context, FourFloatColorToU32(Scaff_Mode_Data->text));
 
-                std::vector<char*> helpTexts = {
-                    (char *)"Select/Exclude area for sorting",
-                    (char *)"K: exit",
-                    (char *)"S: clear select area",
-                    (char *)"Q/W: quit/redo edit",
-                    (char *)"Space: YaHS sort",
-                    (char *)"Left Click: select/unselect the fragment",
-                    (char *)selectedFragmentsStr.c_str(),
-                    (char *)start_and_end_pixel_str.c_str()
+                std::vector<std::string> helpTexts = {
+                    "Select/Exclude area for sorting",
+                    "F: exit",
+                    "S: clear select area", 
+                    "C/Z: cut / cancel cut",
+                    "Q/W: quit / redo edit",
+                    "Space: Pixel sort",
+                    "Left Click: un/select the fragment",
+                    fmt::format("Up/Down: inc/dec Cut threshold: {:.4f}", auto_curation_state.auto_cut_threshold).c_str(),
+                    fmt::format("Left/Right: change Sort Mode ({})", auto_curation_state.sort_mode_names[auto_curation_state.sort_mode]),
+                    // fmt::format("Selected fragments number: {}", select_area.selected_frag_ids.size()),
+                    // fmt::format("Select pixel range: {} - {}", auto_curation_state.get_start(), auto_curation_state.get_end())
                 };
 
                 f32 textBoxHeight = (f32)helpTexts.size() * (lh + 1.0f) - 1.0f;
                 f32 spacing = 10.0f;
 
                 f32 textWidth = 0.f; 
-                for (auto* i :helpTexts){
-                    textWidth = my_Max(textWidth, fonsTextBounds(FontStash_Context, 0, 0, i, 0, NULL));
+                for (const auto& i :helpTexts){
+                    textWidth = my_Max(textWidth, fonsTextBounds(FontStash_Context, 0, 0, i.c_str(), 0, NULL));
                 } 
                 textWidth = my_Min(textWidth, width - 2 * spacing);
 
@@ -3552,7 +3605,7 @@ Render() {
                         FontStash_Context, 
                         width - spacing - textWidth, 
                         height - spacing - textBoxHeight + (i * (lh + 1.0f)), 
-                        helpTexts[i], 
+                        helpTexts[i].c_str(), 
                         0);
                 }
             }
@@ -3566,7 +3619,7 @@ Render() {
                     // draw the start & end point
                     {   
                         f32 line_width = 0.002f / Camera_Position.z;
-                        f32 mask_color[4] = {1.0f, 0.f, 0.f, 0.8f};
+                        f32 mask_color[4] = {1.0f, 0.f, 0.f, 0.8f}; // red
                         glUseProgram(Flat_Shader->shaderProgram);
                         glUniform4fv(Flat_Shader->colorLocation, 1, (GLfloat *)&mask_color);
                         for (auto loc_fraction : {start_fraction, end_fraction})
@@ -3585,7 +3638,7 @@ Render() {
 
                     // draw the cover on selected area
                     {   
-                        f32 mask_color[4] = {0.906f, 0.03921f, 0.949f, 0.5f}; 
+                        // f32 mask_color[4] = {0.906f, 0.03921f, 0.949f, 0.5f}; 
                         vert[0].x = ModelXToScreen(start_fraction - 0.5f);     vert[0].y = ModelYToScreen(0.5f - start_fraction);
                         vert[1].x = ModelXToScreen(start_fraction - 0.5f);     vert[1].y = ModelYToScreen(0.5f - end_fraction);
                         vert[2].x = ModelXToScreen(end_fraction - 0.5f);       vert[2].y = ModelYToScreen(0.5f - end_fraction);
@@ -3595,7 +3648,7 @@ Render() {
                         u32 colour = FourFloatColorToU32(*((nk_colorf *)font_color));
 
                         glUseProgram(Flat_Shader->shaderProgram);
-                        glUniform4fv(Flat_Shader->colorLocation, 1, (GLfloat *)&mask_color);
+                        glUniform4fv(Flat_Shader->colorLocation, 1, (GLfloat *)&auto_curation_state.mask_color);
 
                         glBindBuffer(GL_ARRAY_BUFFER, Scaff_Bar_Data->vbos[ptr]);
                         glBufferSubData(GL_ARRAY_BUFFER, 0, 4 * sizeof(vertex), vert);
@@ -3604,15 +3657,19 @@ Render() {
 
                         glUseProgram(UI_Shader->shaderProgram);
                         fonsSetColor(FontStash_Context, colour);
+                        
+                        std::string buff = fmt::format(
+                            "{}: ({}) pixels, ({}) fragments", 
+                            auto_curation_state.selected_or_exclude==0?"Selected" :"Excluded", 
+                            std::abs(auto_curation_state.get_end() - auto_curation_state.get_start()), 
+                            select_area.selected_frag_ids.size());
 
-                        char buff[256];
                         f32 lh = 0.0f;
-                        stbsp_snprintf(buff, sizeof(buff), "%s (%d) Pixs: %s", auto_curation_state.selected_or_exclude==0?"Select" :"Exclude", std::abs(auto_curation_state.get_end() - auto_curation_state.get_start()), std::to_string(selected_frag_ids.size()).c_str());
-                        f32 textWidth = fonsTextBounds(FontStash_Context, 0, 0, buff, 0, NULL);
+                        f32 textWidth = fonsTextBounds(FontStash_Context, 0, 0, buff.c_str(), 0, NULL);
                         fonsDrawText(
                             FontStash_Context, 
                             ModelXToScreen( 0.5f * (end_fraction + start_fraction ) - 0.5f) - (0.5f * textWidth), 
-                            ModelYToScreen(0.5f - 0.5f*(start_fraction + end_fraction)) - lh * 0.5f, buff, 0);
+                            ModelYToScreen(0.5f - 0.5f*(start_fraction + end_fraction)) - lh * 0.5f, buff.c_str(), 0);
                     }
                 }
             }
@@ -3649,7 +3706,7 @@ Render() {
                 end_contig += ((f32)cont->length / (f32)Number_of_Pixels_1D); // end of the contig
                 if (*cont->metaDataFlags)
                 {
-                    u32 tmp = 0;
+                    u32 tmp = 0; // used to count the number of tags drawn
                     bool haplotigTagged = false;
                     ForLoop2(ArrayCount(Meta_Data->tags))
                     {
@@ -3686,7 +3743,9 @@ Render() {
                         }
                     }
 
-                    if (haplotigTagged && Grey_Haplotigs)
+                    // draw the grey out mask
+                    std::string grey_out_tag = Grey_Out_Settings->is_grey_out(cont->metaDataFlags, Meta_Data);
+                    if (!grey_out_tag.empty())
                     {
                         vert[0].x = ModelXToScreen(start_contig - 0.5f);     vert[0].y = ModelYToScreen(0.5f - start_contig);
                         vert[1].x = ModelXToScreen(start_contig - 0.5f);     vert[1].y = ModelYToScreen(0.5f - end_contig);
@@ -3829,8 +3888,8 @@ Render() {
             textBoxHeight *= (3.0f + (f32)nExtra);
             textBoxHeight += (2.0f + (f32)nExtra);
 
-            u32 id1 = Map_State->originalContigIds[Tool_Tip_Move.pixels.x];
-            u32 id2 = Map_State->originalContigIds[Tool_Tip_Move.pixels.y];
+            u32 id1 = Map_State->get_original_contig_id(Tool_Tip_Move.pixels.x);
+            u32 id2 = Map_State->get_original_contig_id(Tool_Tip_Move.pixels.y);
             u32 coord1 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.x];
             u32 coord2 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.y];
             
@@ -4092,7 +4151,7 @@ Render() {
                     pix1 = pix1 ? pix1 - 1 : (pix2 < (Number_of_Pixels_1D - 1) ? pix2 + 1 : pix2);
                 }
 
-                original_contig *cont = Original_Contigs + Map_State->originalContigIds[pix1];
+                original_contig *cont = Original_Contigs + Map_State->get_original_contig_id(pix1);
 
                 u32 nPixels = Number_of_Pixels_1D;
                 f64 bpPerPixel = (f64)Total_Genome_Length / (f64)nPixels;
@@ -4111,7 +4170,7 @@ Render() {
                 if (!line1Done)
                 {
                     f64 bpEnd = bpPerPixel * (f64)Map_State->contigRelCoords[pix2];
-                    original_contig *cont2 = Original_Contigs + Map_State->originalContigIds[pix2];
+                    original_contig *cont2 = Original_Contigs + Map_State->get_original_contig_id(pix2);
                     stbsp_snprintf(line1, 64, "%s[%$.2fbp] to %s[%$.2fbp]", cont->name, bpStart, cont2->name, bpEnd);
                     if (Edit_Pixels.editing)
                     {
@@ -4318,7 +4377,7 @@ Render() {
         }
 
 
-        if (Yahs_sorting)
+        if (auto_sort_state)
         {
             u32 colour = glfonsRGBA(Theme_Colour.r, Theme_Colour.g, Theme_Colour.b, Theme_Colour.a);
 
@@ -4331,7 +4390,25 @@ Render() {
             glUseProgram(UI_Shader->shaderProgram);
             glUniformMatrix4fv(Flat_Shader->matLocation, 1, GL_FALSE, textNormalMat);
             glViewport(0, 0, (s32)width, (s32)height);
-            fonsDrawText(FontStash_Context, width * 0.5f, height * 0.5f, "YaHS Sorting...", 0);
+            fonsDrawText(FontStash_Context, width * 0.5f, height * 0.5f, "Pixel Sorting...", 0);
+
+            ChangeSize((s32)width, (s32)height);
+        }
+
+        if (auto_cut_state)
+        {
+            u32 colour = glfonsRGBA(Theme_Colour.r, Theme_Colour.g, Theme_Colour.b, Theme_Colour.a);
+
+            fonsClearState(FontStash_Context);
+            fonsSetSize(FontStash_Context, 64.0f * Screen_Scale.x);
+            fonsSetAlign(FontStash_Context, FONS_ALIGN_CENTER | FONS_ALIGN_MIDDLE);
+            fonsSetFont(FontStash_Context, Font_Bold);
+            fonsSetColor(FontStash_Context, colour);
+
+            glUseProgram(UI_Shader->shaderProgram);
+            glUniformMatrix4fv(Flat_Shader->matLocation, 1, GL_FALSE, textNormalMat);
+            glViewport(0, 0, (s32)width, (s32)height);
+            fonsDrawText(FontStash_Context, width * 0.5f, height * 0.5f, "Pixel cut...", 0);
 
             ChangeSize((s32)width, (s32)height);
         }
@@ -4565,6 +4642,142 @@ TestFile(const char *fileName, u64 *fileSize = 0)
     return(file); // 仅仅返回正确的file指针，否则返回空指针
 }
 
+
+
+global_function
+void 
+add_graph_to_extensions(
+    memory_arena *arena, 
+    const u32* graph_name, 
+    const u32* graph_data)
+{
+    
+    graph *gph = PushStructP(arena, graph);   // create the size to store the extension data
+    extension_node *node = PushStructP(arena, extension_node);
+    u08 *dataPlusName = PushArrayP(arena, u08, ((sizeof(u32) * Number_of_Pixels_1D) + sizeof(gph->name) )); 
+    gph->data = (u32 *)(dataPlusName + sizeof(gph->name)); 
+    u32 *namePtr = (u32 *)graph_name;  
+    for (u32 i = 0; i < ArrayCount(gph->name); i++ )  // get the graph name
+    {
+        gph->name[i] = *(namePtr + i);
+    }
+    for (u32 i = 0; i < Number_of_Pixels_1D; i++)  // get the graph data
+    {
+        gph->data[i] = *(graph_data + i);
+    }
+    node->type = extension_graph;      // assign the gph to node
+    node->extension = gph;
+    AddExtension(node);     // add node to extension
+    
+    return ;
+}
+
+
+
+global_function
+void 
+push_extensions_to_opengl(memory_arena *arena, u32 added_index = 0, f32 scale=-1.f)
+{   
+    u32 exIndex = 0;
+    // TraverseLinkedList(Extensions.head, extension_node)
+
+    extension_node* node = Extensions.head ;
+    while (added_index--)
+    {
+        node = node->next; // 移动到最后一个节点
+        exIndex ++ ;
+    }
+    for ( ; node; node = node->next) {
+        
+        switch (node->type) 
+        {
+            case extension_graph:
+                {
+                    graph *gph = (graph *)node->extension; // get the graph ptr and assigned to gph
+#define DefaultGraphScale 0.2f
+#define DefaultGraphBase 32.0f
+#define DefaultGraphLineSize 1.0f
+#define DefaultGraphColour {0.1f, 0.8f, 0.7f, 1.0f}
+                    gph->scale = scale>0.f? scale : DefaultGraphScale;
+                    gph->base = DefaultGraphBase;
+                    gph->lineSize = DefaultGraphLineSize;
+                    gph->colour = DefaultGraphColour;
+                    gph->on = 0;
+
+                    gph->shader = PushStructP(arena, editable_plot_shader);
+                    gph->shader->shaderProgram = CreateShader(FragmentSource_EditablePlot.c_str(), VertexSource_EditablePlot.c_str(), GeometrySource_EditablePlot.c_str());
+
+                    glUseProgram(gph->shader->shaderProgram);
+                    glBindFragDataLocation(gph->shader->shaderProgram, 0, "outColor");
+                    gph->shader->matLocation = glGetUniformLocation(gph->shader->shaderProgram, "matrix");
+                    gph->shader->colorLocation = glGetUniformLocation(gph->shader->shaderProgram, "color");
+                    gph->shader->yScaleLocation = glGetUniformLocation(gph->shader->shaderProgram, "yscale");
+                    gph->shader->yTopLocation = glGetUniformLocation(gph->shader->shaderProgram, "ytop");
+                    gph->shader->lineSizeLocation = glGetUniformLocation(gph->shader->shaderProgram, "linewidth");
+
+                    glUniform1i(glGetUniformLocation(gph->shader->shaderProgram, "pixrearrangelookup"), 3);
+                    glUniform1i(glGetUniformLocation(gph->shader->shaderProgram, "yvalues"), 4 + (s32)exIndex);
+
+                    u32 nValues = Number_of_Pixels_1D;
+                    auto* xValues = new f32[nValues]; // allocate memory for xValues, actually, x is the coordinate of the pixel
+                    auto* yValues = new f32[nValues];
+                    
+                    u32 max = 0;
+                    ForLoop(Number_of_Pixels_1D)
+                    {
+                        max = my_Max(max, gph->data[index]);
+                    }
+
+                    ForLoop(Number_of_Pixels_1D)
+                    {
+                        xValues[index] = (f32)index;
+                        yValues[index] = (f32)gph->data[index] / (f32)max ;   // normalise the data
+                    }
+
+                    glActiveTexture(GL_TEXTURE4 + exIndex++);
+
+                    GLuint yVal, yValTex;
+
+                    // generate a buffer object named yVal and save data to yVal
+                    glGenBuffers(1, &yVal);
+                    glBindBuffer(GL_TEXTURE_BUFFER, yVal);
+                    glBufferData(GL_TEXTURE_BUFFER, sizeof(f32) * nValues, yValues, GL_STATIC_DRAW);
+
+                    // add texture and link to the buffer object
+                    glGenTextures(1, &yValTex);
+                    glBindTexture(GL_TEXTURE_BUFFER, yValTex);
+                    glTexBuffer(GL_TEXTURE_BUFFER, GL_R32F, yVal);
+
+                    gph->shader->yValuesBuffer = yVal;
+                    gph->shader->yValuesBufferTex = yValTex;
+                    
+                    // add the vertext data into buffer
+                    glGenBuffers(1, &gph->vbo);
+                    glBindBuffer(GL_ARRAY_BUFFER, gph->vbo);
+                    glBufferData(GL_ARRAY_BUFFER, sizeof(f32) * nValues, xValues, GL_STATIC_DRAW);
+
+                    // gen the vertex array object
+                    glGenVertexArrays(1, &gph->vao);
+                    glBindVertexArray(gph->vao);
+
+                    GLuint posAttrib = (GLuint)glGetAttribLocation(gph->shader->shaderProgram, "position");
+                    glEnableVertexAttribArray(posAttrib);
+                    glVertexAttribPointer(posAttrib, 1, GL_FLOAT, GL_FALSE, 0, 0);
+
+                    delete[] xValues;
+                    delete[] yValues;
+
+                    glActiveTexture(GL_TEXTURE0);
+                }
+                break;
+        }
+    }
+
+    return ;
+}
+
+
+
 global_function
 u08
 LoadState(u64 headerHash, char *path = 0);
@@ -4658,6 +4871,16 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         {
             delete[] Contact_Matrix->vbos; 
             Contact_Matrix->vbos = nullptr;
+        }
+        if (pixel_density_extension)
+        {
+            delete pixel_density_extension;
+            pixel_density_extension = nullptr;
+        }
+        if (frag_cut_cal_ptr)
+        {
+            delete frag_cut_cal_ptr;
+            frag_cut_cal_ptr = nullptr;
         }
         ResetMemoryArenaP(arena); // release all the memory allocated, avoid memory leak
         auto_curation_state.clear();
@@ -5202,93 +5425,7 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 
     // Extensions
     {
-        u32 exIndex = 0;
-        // TraverseLinkedList(Extensions.head, extension_node)
-        for (extension_node* node = Extensions.head; node; node = node->next) {
-            
-            switch (node->type)
-            {
-                case extension_graph:
-                    {
-                        graph *gph = (graph *)node->extension; // get the graph ptr and assigned to gph
-#define DefaultGraphScale 0.2f
-#define DefaultGraphBase 32.0f
-#define DefaultGraphLineSize 1.0f
-#define DefaultGraphColour {0.1f, 0.8f, 0.7f, 1.0f}
-                        gph->scale = DefaultGraphScale;
-                        gph->base = DefaultGraphBase;
-                        gph->lineSize = DefaultGraphLineSize;
-                        gph->colour = DefaultGraphColour;
-                        gph->on = 0;
-
-                        gph->shader = PushStructP(arena, editable_plot_shader);
-                        gph->shader->shaderProgram = CreateShader(FragmentSource_EditablePlot.c_str(), VertexSource_EditablePlot.c_str(), GeometrySource_EditablePlot.c_str());
-
-                        glUseProgram(gph->shader->shaderProgram);
-                        glBindFragDataLocation(gph->shader->shaderProgram, 0, "outColor");
-                        gph->shader->matLocation = glGetUniformLocation(gph->shader->shaderProgram, "matrix");
-                        gph->shader->colorLocation = glGetUniformLocation(gph->shader->shaderProgram, "color");
-                        gph->shader->yScaleLocation = glGetUniformLocation(gph->shader->shaderProgram, "yscale");
-                        gph->shader->yTopLocation = glGetUniformLocation(gph->shader->shaderProgram, "ytop");
-                        gph->shader->lineSizeLocation = glGetUniformLocation(gph->shader->shaderProgram, "linewidth");
-
-                        glUniform1i(glGetUniformLocation(gph->shader->shaderProgram, "pixrearrangelookup"), 3);
-                        glUniform1i(glGetUniformLocation(gph->shader->shaderProgram, "yvalues"), 4 + (s32)exIndex);
-
-                        u32 nValues = Number_of_Pixels_1D;
-                        auto* xValues = new f32[nValues]; // allocate memory for xValues, actually, x is the coordinate of the pixel
-                        auto* yValues = new f32[nValues];
-                        
-                        u32 max = 0;
-                        ForLoop(Number_of_Pixels_1D)
-                        {
-                            max = my_Max(max, gph->data[index]);
-                        }
-
-                        ForLoop(Number_of_Pixels_1D)
-                        {
-                            xValues[index] = (f32)index;
-                            yValues[index] = (f32)gph->data[index] / (f32)max ;   // normalise the data
-                        }
-
-                        glActiveTexture(GL_TEXTURE4 + exIndex++);
-
-                        GLuint yVal, yValTex;
-
-                        // generate a buffer object named yVal and save data to yVal
-                        glGenBuffers(1, &yVal);
-                        glBindBuffer(GL_TEXTURE_BUFFER, yVal);
-                        glBufferData(GL_TEXTURE_BUFFER, sizeof(f32) * nValues, yValues, GL_STATIC_DRAW);
-
-                        // add texture and link to the buffer object
-                        glGenTextures(1, &yValTex);
-                        glBindTexture(GL_TEXTURE_BUFFER, yValTex);
-                        glTexBuffer(GL_TEXTURE_BUFFER, GL_R32F, yVal);
-
-                        gph->shader->yValuesBuffer = yVal;
-                        gph->shader->yValuesBufferTex = yValTex;
-                        
-                        // add the vertext data into buffer
-                        glGenBuffers(1, &gph->vbo);
-                        glBindBuffer(GL_ARRAY_BUFFER, gph->vbo);
-                        glBufferData(GL_ARRAY_BUFFER, sizeof(f32) * nValues, xValues, GL_STATIC_DRAW);
-
-                        // gen the vertex array object
-                        glGenVertexArrays(1, &gph->vao);
-                        glBindVertexArray(gph->vao);
-
-                        GLuint posAttrib = (GLuint)glGetAttribLocation(gph->shader->shaderProgram, "position");
-                        glEnableVertexAttribArray(posAttrib);
-                        glVertexAttribPointer(posAttrib, 1, GL_FLOAT, GL_FALSE, 0, 0);
-
-                        delete[] xValues;
-                        delete[] yValues;
-
-                        glActiveTexture(GL_TEXTURE0);
-                    }
-                    break;
-            }
-        }
+        push_extensions_to_opengl(arena, 0);
     }
 
 #ifdef Internal
@@ -5332,6 +5469,63 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
             node->next = (node + 1);
             (node + 1)->prev = node;
             (node + 1)->next = 0;
+        }
+    }
+
+    // 为添加的功能初始化指针
+    {
+        // 给pixel_density_extension分配内存
+        // pixel_density_extension = new Extension_Graph_Data(Number_of_Pixels_1D);
+        
+        // 为 copy textures to cpu 分配内存
+        if (textures_array_ptr) delete textures_array_ptr;
+        textures_array_ptr = new TexturesArray4AI(
+            Number_of_Textures_1D, 
+            Texture_Resolution, 
+            *fileName, 
+            Contigs
+        );
+        // prepare before reading textures
+        f32 original_color_control_points[3];
+        prepare_before_copy(original_color_control_points);
+        textures_array_ptr->copy_buffer_to_textures(
+            Contact_Matrix, 
+            false
+        ); 
+        restore_settings_after_copy(original_color_control_points);
+
+        // 为 Pixel Cut 存储的数据分配空间，初始化，并且将数据push到extension中
+        if (frag_cut_cal_ptr) delete frag_cut_cal_ptr;
+        frag_cut_cal_ptr = new FragCutCal(
+            textures_array_ptr,
+            Number_of_Pixels_1D,
+            auto_curation_state.auto_cut_diag_window_for_pixel_mean);
+
+        // clear mem for textures
+        textures_array_ptr->clear_textures();
+        
+        // 添加数据到extensions
+        std::string graph_name = "pixel_discontinuity";
+        bool is_pix_density_added = Extensions.is_graph_name_exist(graph_name);
+        if (!is_pix_density_added) // 未添加pixel density
+        {
+            u32 added_num = Extensions.get_num_extensions();
+            u32* graph_data = new u32[Number_of_Pixels_1D];
+            f32 max_desity = 0.f;
+            for (auto& i : frag_cut_cal_ptr->hic_pixel_density_origin) max_desity = std::max(max_desity, i);
+            for (u32 i=0; i < Number_of_Pixels_1D; i ++)
+            {
+                graph_data[i] = (u32)(255 * (1.001f- frag_cut_cal_ptr->hic_pixel_density_origin[i] / max_desity));
+            }
+            add_graph_to_extensions(arena, (u32*)graph_name.c_str(), graph_data);
+            delete[] graph_data;
+            
+            push_extensions_to_opengl(arena, added_num, 0.05f); // push hic_pixel_density to opengl buffer
+        }
+        else 
+        {
+            fmt::print("hic_pixel_density extension already exists\n");
+            assert(false);
         }
     }
 
@@ -5527,6 +5721,18 @@ Setup()
     memset(Meta_Data, 0, sizeof(meta_data));
     MetaData_Active_Tag = 0;
     ForLoop(ArrayCount(Default_Tags)) strcpy((char *)Meta_Data->tags[MetaData_Active_Tag + index], Default_Tags[index]);
+    if (Grey_Out_Settings) 
+    {
+        delete Grey_Out_Settings;
+        Grey_Out_Settings = nullptr;
+    }
+    Grey_Out_Settings = new GreyOutSettings(Meta_Data);
+    if (user_profile_settings_ptr)
+    {
+        delete user_profile_settings_ptr;
+        user_profile_settings_ptr = nullptr;
+    }
+    user_profile_settings_ptr = new UserProfileSettings();
 
     // Contig Name Label UI
     {
@@ -5983,20 +6189,26 @@ RearrangeMap(       // NOTE: VERY IMPORTANT
     bool update_contigs_flag // if true, update the contigs from the map state
     )       
 {
-    if (pixelFrom > pixelTo)  // Swap, make sure pixelFrom is less than pixelTo
-    {
-        u32 tmp = pixelFrom;
-        pixelFrom = pixelTo;
-        pixelTo = tmp;
-    }
 
     u32 nPixels = Number_of_Pixels_1D;
 
-    Assert((delta > 0 ? (u32)delta : (u32)(-delta)) < nPixels);
+    if (std::abs(delta) >= nPixels ||
+        pixelFrom >= nPixels ||
+        pixelTo >= nPixels)
+    {
+        fmt::print(
+            stderr,
+            "RearrangeMap: Invalid parameters: delta = {}, pixelFrom = {}, pixelTo = {},  nPixels = {}, file: {}, line: {}\n",
+            delta, pixelFrom, pixelTo, nPixels, 
+            __FILE__, __LINE__
+        );
+        assert(0);
+    }
 
-    Assert(pixelFrom < nPixels);
-    Assert(pixelTo < nPixels);
-
+    if (pixelFrom > pixelTo)  // Swap, make sure pixelFrom is less than pixelTo
+    {
+        std::swap(pixelFrom, pixelTo);
+    }
     u32 nPixelsInRange = pixelTo - pixelFrom + 1;
 
     pixelFrom += nPixels;
@@ -6172,6 +6384,82 @@ RearrangeMap(       // NOTE: VERY IMPORTANT
 }
 
 
+
+global_function
+void 
+BreakMap(
+    const u32& loc, 
+    const u32 ignore_len // cut点到开头或者结尾的长度不足ignore_len的contig不会被切断
+)
+{  
+    if (loc >= Number_of_Pixels_1D)
+    {
+        char buff[512];
+        snprintf(buff, sizeof(buff), "[Pixel Cut] Error: loc (%d) should be smaller than number of pixels (%d)", loc, Number_of_Pixels_1D);
+        MY_CHECK(buff);
+        assert(0);
+    }
+    u32 original_contig_id = Map_State->originalContigIds[loc];
+    u32 contig_id = Map_State->contigIds[loc];
+    u32 contig_rel_coord = Map_State->contigRelCoords[loc];
+
+    s32 ptr_left = (s32)loc, ptr_right = (s32)loc;
+    u08 inversed = IsContigInverted(contig_id);
+    while ( // 从loc向左遍历，找到第一个不满足条件的像素点索引
+        --ptr_left >= 0 && 
+        Map_State->contigIds[ptr_left] == contig_id && 
+        (Map_State->contigRelCoords[ptr_left] ==  Map_State->contigRelCoords[ptr_left+1]+ (inversed ? +1 : -1)) ) {};
+    while ( // 从loc向右遍历，找到第一个不满足条件的像素点索引
+        ++ptr_right < Number_of_Pixels_1D && 
+        Map_State->contigIds[ptr_right] == contig_id && 
+        (Map_State->contigRelCoords[ptr_right - 1] ==  Map_State->contigRelCoords[ptr_right]+ (inversed ? +1 : -1)) ) {};
+    
+    if ((loc - ptr_left) < ignore_len || (ptr_right - loc) < ignore_len )  
+    {   
+        fmt::print(
+            "[Pixel Cut] Warning: original_contig_id {} current_contig_id {}, pixel range: [{}, cut({}), {}], left({}), right({}), smaller than ignore_len ({}), cut at loc: ({}) is ignored\n", 
+            original_contig_id%Max_Number_of_Contigs, 
+            contig_id, 
+            ptr_left, 
+            loc, 
+            ptr_right, 
+            loc - ptr_left, 
+            ptr_right - loc, 
+            ignore_len, loc);
+        return;
+    } 
+
+    ptr_left++; ptr_right--;
+
+    // cut the contig by amending the original Contig Ids.
+    for (u32 tmp = loc; tmp <= ptr_right; tmp++) // left side
+    {   
+        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Max_Number_of_Contigs))
+        {
+            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the max number of contigs ({}), file: {}, line: {}\n", tmp, 
+            Max_Number_of_Contigs, 
+            (u64)Map_State->originalContigIds[tmp] + Max_Number_of_Contigs, 
+            std::numeric_limits<u32>::max(), 
+            __FILE__, __LINE__);
+            assert(0);
+        }
+        Map_State->originalContigIds[tmp] += Max_Number_of_Contigs;  // NOTE: the number can not exceed the max number 2**32 - 1 = 4294967295. However, it is not easy to exceed the max number of contigs, as 4294967295 / 4096 = 1048575.9997
+    }
+
+    fmt::print(
+        "[Pixel Cut] Original contig_id ({}), current_id ({}), pixel range: [{}, {}] {} inversed, cut at {}\n", 
+        original_contig_id%Max_Number_of_Contigs, 
+        contig_id, 
+        ptr_left, 
+        ptr_right, 
+        inversed ? "(is)" : "(isn\'t)", 
+        loc );
+
+    return ; 
+
+}
+
+
 global_function
 std::vector<s32>
 get_exclude_metaData_idx(const std::vector<std::string>& exclude_tags)
@@ -6213,6 +6501,30 @@ void EraseAllEdits(map_editor* map_editor_, u32 max_edit_recorded=Edits_Stack_Si
 }
 
 
+void run_ai_detection()
+{
+    std::cout << "Running AI detection..." << std::endl;
+    int status = std::system("/Users/sg35/miniconda3/envs/auto_cut/bin/python /Users/sg35/PretextView/python/autoCut/auto_cut.py");  
+
+    // 检查命令执行状态
+    if (status == 0) {
+        std::cout << "Command successful!" << std::endl;
+    } else {
+        std::cerr << "Command failed, code: " << status << std::endl;
+    }
+}
+
+void cut_frags(const std::vector<u32>& problem_locs)
+{
+    for (auto & i : problem_locs)
+    {
+        // cut the fragment
+        BreakMap(i, auto_curation_state.auto_cut_smallest_frag_size_in_pixel);
+        UpdateContigsFromMapState();
+    }
+    Redisplay = 1;
+}
+
 
 void AutoCurationFromFragsOrder(
     const FragsOrder* frags_order_,
@@ -6222,24 +6534,40 @@ void AutoCurationFromFragsOrder(
 {   
     u08 using_select_area = (select_area && select_area->select_flag)? 1 : 0;
     u32 num_frags = contigs_->numberOfContigs;
-    if (!using_select_area && num_frags != frags_order_->get_num_frags()) 
+    if (!using_select_area ) 
+    {   
+        if ( num_frags != frags_order_->get_num_frags())
+        {
+            fprintf(stderr, "Number of contigs(%d) and fragsOrder.num_frags(%d) do not match.\n", num_frags, frags_order_->get_num_frags());
+            assert(0);
+        }
+    }
+    else
     {
-        fprintf(stderr, "Number of contigs(%d) and fragsOrder.num_frags(%d) do not match.\n", num_frags, frags_order_->get_num_frags());
-        return;
+        if (select_area->get_to_sort_frags_num() != frags_order_->get_num_frags())
+        {
+            fmt::print(
+                stderr, 
+                "num_to_sort_contigs({}) != fragsOrder.num_frags({}), file:{}, line:{}\n", select_area->get_to_sort_frags_num(), 
+                frags_order_->get_num_frags(), 
+                __FILE__, __LINE__);
+            assert(0);
+        }
     }
 
     u32 num_autoCurated_edits=0;
 
     // check the difference between the contigs, order and the new frags order
     u32 start_loc = 0;
-    std::vector<std::pair<s32, s32>> current_order(num_frags);
+    std::vector<std::pair<s32, s32>> current_order(num_frags); // [contig_id, contig_length]
     std::vector<s32> predicted_order = frags_order_->get_order_without_chromosomeInfor(); // start from 1
     if (using_select_area)
     {
         std::vector<s32> full_predicted_order(num_frags);
         std::iota(full_predicted_order.begin(), full_predicted_order.end(), 1);
-        for (u32 i=0; i< select_area->selected_frag_ids.size(); i++) 
-            full_predicted_order[select_area->selected_frag_ids[i]] = (predicted_order[i]>0?1:-1) * (select_area->selected_frag_ids[0] + std::abs(predicted_order[i]));
+        auto frags_id_to_sort = select_area->get_to_sort_frags_id(Contigs);
+        for (u32 i=0; i< select_area->get_to_sort_frags_num(); i++) 
+            full_predicted_order[frags_id_to_sort[i]] = (predicted_order[i]>0?1:-1) * (select_area->get_first_frag_id() + std::abs(predicted_order[i]));
         predicted_order = full_predicted_order;
     }
     for (s32 i = 0; i < num_frags; ++i) current_order[i] = {i+1, contigs_->contigs_arr[i].length}; // start from 1
@@ -6280,7 +6608,7 @@ void AutoCurationFromFragsOrder(
             AddMapEdit(0, {start_loc, start_loc + current_order[i].second - 1}, true);
             current_order[i].first = -current_order[i].first;
             start_loc += current_order[i].second;
-            printf("[Auto curation] (#%d) Invert contig %d.\n", ++num_autoCurated_edits, predicted_order[i]);
+            printf("[Pixel Sort] (#%d) Invert contig %d.\n", ++num_autoCurated_edits, predicted_order[i]);
             continue;
         }
         else if (
@@ -6295,15 +6623,19 @@ void AutoCurationFromFragsOrder(
             while (std::abs(predicted_order[i])!=std::abs(current_order[tmp_i].first))
             {
                 if (tmp_i >= num_frags)
-                {
-                    fprintf(stderr, "Error: contig %d not found in the current order.\n", current_order[i].first);
-                    MY_CHECK(0);
+                {   
+                    char buff[256];
+                    snprintf(buff, sizeof(buff), "Error: contig %d not found in the current order.\n", current_order[i].first);
+                    MY_CHECK(buff);
+                    assert(0);
                 }
                 pixelFrom += current_order[tmp_i].second; // length updated based on the current order
                 if (pixelFrom>=Number_of_Pixels_1D)
-                {
-                    fprintf(stderr, "Error: pixelFrom(%d) >= Number_of_Pixels_1D(%d).\n", pixelFrom, Number_of_Pixels_1D);
-                    MY_CHECK(0);
+                {   
+                    char buff[256];
+                    snprintf(buff, sizeof(buff), "Error: pixelFrom(%d) >= Number_of_Pixels_1D(%d).\n", pixelFrom, Number_of_Pixels_1D);
+                    MY_CHECK(buff);
+                    assert(0);
                 }
                 ++tmp_i;
             }
@@ -6322,9 +6654,9 @@ void AutoCurationFromFragsOrder(
             start_loc += current_order[i].second; // update start_loc after move fragments
             if (is_curated_inverted)
             {
-                printf("[Auto curation] (#%d) Invert and Move contig %d to %d, start_loc:%d.\n", ++num_autoCurated_edits, predicted_order[i], i, start_loc);
+                printf("[Pixel Sort] (#%d) Invert and Move contig %d to %d, start_loc:%d.\n", ++num_autoCurated_edits, predicted_order[i], i, start_loc);
             }
-            else printf("[Auto curation] (#%d) Move contig %d to %d, start_loc:%d.\n", ++num_autoCurated_edits, predicted_order[i], i, start_loc);
+            else printf("[Pixel Sort] (#%d) Move contig %d to %d, start_loc:%d.\n", ++num_autoCurated_edits, predicted_order[i], i, start_loc);
             continue;
         }
         else 
@@ -6333,7 +6665,7 @@ void AutoCurationFromFragsOrder(
             continue;
         }
     }
-    printf("[Auto curatioin] finished with %d edits\n", num_autoCurated_edits);
+    printf("[Pixel Sort] finished with %d edits\n", num_autoCurated_edits);
 
     return ;
 }
@@ -6341,85 +6673,191 @@ void AutoCurationFromFragsOrder(
 
 global_function
 void
-Sort_yahs(char* currFileName)
+auto_cut_func(
+    char * currFileName,
+    memory_arena* arena = nullptr,
+    std::string file_save_name = std::string("/auto_curation_tmp")
+)
 {   
-    if (!currFileName || !Yahs_sorting) return;
+    if (!currFileName || !auto_cut_state) return;
+
+    if (auto_cut_state == 2) // restore the cutted frags within the selected area
+    {   
+        u32 start = auto_curation_state.get_start();
+        u32 end = auto_curation_state.get_end();
+        if (start < 0 || end < 0) 
+        {
+            fmt::print(
+                stdout, 
+                "Error: no area selected. start({}) or end({}) is less than 0\n", 
+                start, end);
+            return ;
+        }
+        fmt::print(stdout, "[Pixel cut] restoring the cutted frags within the selected area: [{}, {}]\n", start, end);
+        Map_State->restore_cutted_contigs( start, end );
+        UpdateContigsFromMapState();
+        Redisplay = 1;
+        return ;
+    }
+
+    // classic cut 
+    {  
+        SelectArea selected_area;
+        auto_curation_state.get_selected_fragments(
+            selected_area, 
+            Map_State, 
+            Number_of_Pixels_1D, 
+            Contigs);
+        glBindBuffer(GL_TEXTURE_BUFFER, Contact_Matrix->pixelRearrangmentLookupBuffer);
+        const u32 *pixel_rearrange_index = (const u32 *)glMapBufferRange(GL_TEXTURE_BUFFER, 0, Number_of_Pixels_1D * sizeof(u32), GL_MAP_READ_BIT);
+        std::vector<u32> cut_locs_pixel = frag_cut_cal_ptr->get_cut_locs_pixel(
+            auto_curation_state, 
+            pixel_rearrange_index, // pixel_rearrangement_buffer
+            Contigs,
+            &selected_area
+        );
+        glUnmapBuffer(GL_TEXTURE_BUFFER);
+        
+        fmt::print(stdout, "[Pixel cut] cut locs in pixel: [");
+        for (auto & i : cut_locs_pixel) fmt::print(stdout, "{} ", i);
+        fmt::print(stdout, "]\n");
+        
+        // cut the contigs
+        cut_frags(cut_locs_pixel);
+    }
+
+    // generate figures
+    if (0)
+    {
+        fprintf(stdout, "[Pixel cut] generating hic figures...\n");
+        Hic_Figure hic_figure(
+            Total_Genome_Length, 
+            file_save_name,
+            textures_array_ptr );
+        hic_figure.generate_hic_figures();
+
+        // run ai model with python script
+        run_ai_detection();
+
+        // restore the error info via reading the error json
+        HIC_Problems hic_problems("/auto_curation_tmp/auto_cut_output/infer_result/infer_result.json", (f32) Total_Genome_Length / (f32)Number_of_Pixels_1D ); 
+        std::vector<std::vector<u32>> problem_loc = hic_problems.get_problem_loci();
+        }
+
+
+    // cut the contigs 
+    // cut_frags();
+
+    return ;
+}
+
+
+global_function
+void
+auto_sort_func(char* currFileName)
+{   
+    if (!currFileName || !auto_sort_state) return;
     
     fprintf(stdout, "========================\n");
-    fprintf(stdout, "[YaHS Sort] start...\n");
-    fprintf(stdout, "[YaHS Sort] smallest_frag_size_in_pixel: %d\n", auto_curation_state.smallest_frag_size_in_pixel);
-    fprintf(stdout, "[YaHS Sort] link_score_threshold:        %.3f\n", auto_curation_state.link_score_threshold);
-    fprintf(stdout, "[YaHS Sort] Sort mode:                   %s\n", auto_curation_state.get_sort_mode_name().c_str());
+    fprintf(stdout, "[Pixel Sort] start...\n");
+    fprintf(stdout, "[Pixel Sort] smallest_frag_size_in_pixel: %d\n", auto_curation_state.smallest_frag_size_in_pixel);
+    fprintf(stdout, "[Pixel Sort] link_score_threshold:        %.3f\n", auto_curation_state.link_score_threshold);
+    fprintf(stdout, "[Pixel Sort] Sort mode:                   %s\n", auto_curation_state.get_sort_mode_name().c_str());
+
     // compress the HiC data
-    auto texture_array_4_ai = TexturesArray4AI(Number_of_Textures_1D, Texture_Resolution, (char*)currFileName, Contigs);
-
     // prepare before reading textures
-    f32 original_control_points[3];
-    prepare_before_copy(original_control_points);
-    texture_array_4_ai.copy_buffer_to_textures_dynamic(Contact_Matrix, false); // copy the remapped data which is reordered according to the Map_State
-    restore_settings_after_copy(original_control_points);
-
+    f32 original_color_control_points[3];
+    prepare_before_copy(original_color_control_points);
+    textures_array_ptr->copy_buffer_to_textures_dynamic(Contact_Matrix, false); 
+    restore_settings_after_copy(original_color_control_points);
     // check if select the area for sorting
     SelectArea selected_area;
-    auto_curation_state.get_selected_fragments(selected_area.selected_frag_ids, Map_State, Number_of_Pixels_1D);
+    auto_curation_state.get_selected_fragments(
+        selected_area, 
+        Map_State, 
+        Number_of_Pixels_1D, 
+        Contigs
+    );
     if (auto_curation_state.get_start() >=0 && auto_curation_state.get_end() >= 0 && selected_area.selected_frag_ids.size() > 0)
     {   
-        fprintf(stdout, "Using selected area for sorting:\n");
-        fprintf(stdout, "Selected pixel range: %d ~ %d\n", auto_curation_state.get_start(), auto_curation_state.get_end());
+        fprintf(stdout, "[Pixel Sort] Using selected area for sorting:\n");
+        fprintf(stdout, "[Pixel Sort] Selected pixel range: %d ~ %d\n", auto_curation_state.get_start(), auto_curation_state.get_end());
         std::stringstream ss; 
         ss << selected_area.selected_frag_ids[0];
         for (u32 i = 1; i < selected_area.selected_frag_ids.size(); ++i) ss << ", " << selected_area.selected_frag_ids[i];
-        fprintf(stdout, "Selected fragments: %s\n\n", ss.str().c_str());
+        fmt::print(stdout, "[Pixel Sort] Selected fragments ({}): {}\n\n", selected_area.selected_frag_ids.size(), ss.str().c_str());
         selected_area.select_flag = true;
         selected_area.start_pixel = auto_curation_state.get_start();
         selected_area.end_pixel = auto_curation_state.get_end();
     }
 
-    texture_array_4_ai.cal_compressed_hic(
+    textures_array_ptr->cal_compressed_hic(
         Contigs, 
         Extensions, 
         false, 
         false, 
         &selected_area
     );
-    FragsOrder frags_order(texture_array_4_ai.get_num_frags()); // intilize the frags_order with the number of fragments including the filtered out ones
-    // exclude the fragments with first two tags during the auto curationme
+    FragsOrder frags_order(textures_array_ptr->get_num_frags()); // intilize the frags_order with the number of fragments including the filtered out ones
+    // exclude the fragments with first two tags during the auto curation 
     std::vector<std::string> exclude_tags = {"haplotig", "unloc"};
     std::vector<s32> exclude_meta_tag_idx = get_exclude_metaData_idx(exclude_tags);
     LikelihoodTable likelihood_table(
-        texture_array_4_ai.get_frags(), 
-        texture_array_4_ai.get_compressed_hic(), 
+        textures_array_ptr->get_frags(),
+        textures_array_ptr->get_compressed_hic(),
         (f32)auto_curation_state.smallest_frag_size_in_pixel / ((f32)Number_of_Pixels_1D + 1.f), 
         exclude_meta_tag_idx, 
         Number_of_Pixels_1D);
+    
+    #ifdef DEBUG_OUTPUT_LIKELIHOOD_TABLE
+        likelihood_table.output_fragsInfo_likelihoodTable("frags_info_likelihood_table.txt", textures_array_ptr->get_compressed_hic());
+    #endif // DEBUG_OUTPUT_LIKELIHOOD_TABLE
+    
+    // clear mem for textures and compressed hic
+    textures_array_ptr->clear_textures(); 
+    textures_array_ptr->clear_compressed_hic();
+
     // use the compressed_hic to calculate the frags_order directly
-    if (auto_curation_state.sort_mode == 0)
+    if (auto_curation_state.sort_mode == 0 || !selected_area.select_flag) // sort with union find if sorting the whole genome
     {
         frag_sort_method->sort_according_likelihood_unionFind( 
             likelihood_table, 
             frags_order, 
+            selected_area,
             auto_curation_state.link_score_threshold, 
-            texture_array_4_ai.get_frags());
+            textures_array_ptr->get_frags());
     }
     else if (auto_curation_state.sort_mode == 1)
     {
         frag_sort_method->sort_according_likelihood_unionFind_doFuse( 
             likelihood_table, 
             frags_order, 
+            selected_area,
             auto_curation_state.link_score_threshold, 
-            texture_array_4_ai.get_frags(), true, true);
+            textures_array_ptr->get_frags(), true, true);
     }
     else if (auto_curation_state.sort_mode == 2)
     {
         frag_sort_method->sort_according_likelihood_unionFind_doFuse( 
             likelihood_table, 
             frags_order, 
+            selected_area,
             auto_curation_state.link_score_threshold, 
-            texture_array_4_ai.get_frags(), false, true);
+            textures_array_ptr->get_frags(), false, true);
+    }
+    else if (auto_curation_state.sort_mode == 3) // not finished yet
+    {
+        frag_sort_method->sort_according_yahs(
+            likelihood_table,
+            frags_order,
+            selected_area,
+            auto_curation_state.link_score_threshold,
+            textures_array_ptr->get_frags()
+        );
     }
     else 
     {
-        fprintf(stderr, "[YaHS Sort] Error: Unknown sort mode (%d)\n", auto_curation_state.sort_mode);
+        fprintf(stderr, "[Pixel Sort] Error: Unknown sort mode (%d)\n", auto_curation_state.sort_mode);
         assert(0);
     }
     AutoCurationFromFragsOrder(
@@ -6428,16 +6866,19 @@ Sort_yahs(char* currFileName)
         Map_State, 
         &selected_area);
     std::cout << std::endl;
-    Yahs_sorting = 0;
+    auto_sort_state = 0;
 
     return;
 }
 
 
 // set the vertex array for the contact matrix
-// copy_flag: if true, show full texture for copy the texture to array on cpu
+// copy_flag: if true, set vaos to [-1, 1, -1, 1] for copying tiles from opengl buffer to cpu memory
 global_function
-void setContactMatrixVertexArray(contact_matrix* Contact_Matrix_, bool copy_flag, bool regenerate_flag)
+void setContactMatrixVertexArray(
+    contact_matrix* Contact_Matrix_, 
+    bool copy_flag, 
+    bool regenerate_flag)
 {   
     glUseProgram(Contact_Matrix_->shaderProgram);
     GLuint posAttrib = (GLuint)glGetAttribLocation(Contact_Matrix_->shaderProgram, "position");
@@ -6494,26 +6935,27 @@ void setContactMatrixVertexArray(contact_matrix* Contact_Matrix_, bool copy_flag
                 3 2
                 0 1
             */
-            textureVertices[0].x = !copy_flag? x               : -1.f;   // x -> [-0.5, 0.5]
-            textureVertices[0].y = !copy_flag? y - quadSize    : -1.f;   // y -> [-0.5, 0.5]
+            f32 half_len = 1.0f;
+            textureVertices[0].x = !copy_flag? x               : -half_len;   // x -> [-0.5, 0.5]
+            textureVertices[0].y = !copy_flag? y - quadSize    : -half_len;   // y -> [-0.5, 0.5]
             textureVertices[0].s = !copy_flag? cornerCoords[0] :  0.f; // s表示texture的水平分量
             textureVertices[0].t = !copy_flag? cornerCoords[1] :  0.f; // t表示texture的垂直分量
             textureVertices[0].u = texture_index_symmetric;
 
-            textureVertices[1].x = !copy_flag? x + quadSize    :  1.f;   
-            textureVertices[1].y = !copy_flag? y - quadSize    : -1.f;
+            textureVertices[1].x = !copy_flag? x + quadSize    :  half_len;   
+            textureVertices[1].y = !copy_flag? y - quadSize    : -half_len;
             textureVertices[1].s = !copy_flag? 1.0f            :  1.f;
             textureVertices[1].t = !copy_flag? 1.0f            :  0.f;
             textureVertices[1].u = texture_index_symmetric;
 
-            textureVertices[2].x = !copy_flag? x + quadSize    :  1.f;   
-            textureVertices[2].y = !copy_flag? y               :  1.f;
+            textureVertices[2].x = !copy_flag? x + quadSize    :  half_len;   
+            textureVertices[2].y = !copy_flag? y               :  half_len;
             textureVertices[2].s = !copy_flag? cornerCoords[1] :  1.f;
             textureVertices[2].t = !copy_flag? cornerCoords[0] :  1.f;
             textureVertices[2].u = texture_index_symmetric;
 
-            textureVertices[3].x = !copy_flag? x               : -1.f;              
-            textureVertices[3].y = !copy_flag? y               :  1.f;
+            textureVertices[3].x = !copy_flag? x               : -half_len;              
+            textureVertices[3].y = !copy_flag? y               :  half_len;
             textureVertices[3].s = !copy_flag? 0.0f            :  0.f;
             textureVertices[3].t = !copy_flag? 0.0f            :  1.f;
             textureVertices[3].u = texture_index_symmetric;
@@ -6562,14 +7004,15 @@ void setContactMatrixVertexArray(contact_matrix* Contact_Matrix_, bool copy_flag
 
 global_function
 void 
-prepare_before_copy(f32 *original_control_points)
+prepare_before_copy(f32 *original_color_control_points)
 {
     // prepare before reading textures
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_BUFFER, Color_Maps->maps[Color_Maps->nMaps-1]);
+
+    glBindTexture(GL_TEXTURE_BUFFER, Color_Maps->maps[Color_Maps->nMaps-1]); // 绑定到颜色映射的最后一个颜色
     glActiveTexture(GL_TEXTURE0);
     for (u32 i = 0; i < 3 ; i ++ ) 
-        original_control_points[i] = Color_Maps->controlPoints[i];
+        original_color_control_points[i] = Color_Maps->controlPoints[i];
     Color_Maps->controlPoints[0] = 0.0f;
     Color_Maps->controlPoints[1] = 0.5f;
     Color_Maps->controlPoints[2] = 1.0f;
@@ -6582,12 +7025,12 @@ prepare_before_copy(f32 *original_control_points)
 
 global_function
 void 
-restore_settings_after_copy(const f32 *original_control_points)
+restore_settings_after_copy(const f32 *original_color_control_points)
 {
     // restore settings
     setContactMatrixVertexArray(Contact_Matrix, false, true);  // restore the vertex array for rendering
     for (u32 i = 0 ; i < 3 ; i ++ )
-        Color_Maps->controlPoints[i] = original_control_points[i];
+        Color_Maps->controlPoints[i] = original_color_control_points[i];
     glUseProgram(Contact_Matrix->shaderProgram);
     glUniform3fv( Color_Maps->cpLocation, 1, Color_Maps->controlPoints);
     glActiveTexture(GL_TEXTURE1);
@@ -6858,7 +7301,7 @@ global_function
 void
 KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
 {
-    if (!Loading && !Yahs_sorting && (action != GLFW_RELEASE || key == GLFW_KEY_SPACE || key == GLFW_KEY_A || key == GLFW_KEY_LEFT_SHIFT))
+    if (!Loading && !auto_sort_state && !auto_cut_state && (action != GLFW_RELEASE || key == GLFW_KEY_SPACE || key == GLFW_KEY_A || key == GLFW_KEY_LEFT_SHIFT))
     {
         if (UI_On)
         {
@@ -6991,23 +7434,31 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_C:
-                    if (!Extensions.head) break;
-                    TraverseLinkedList(Extensions.head, extension_node)
+                    if (Select_Sort_Area_Mode && auto_curation_state.get_selected_fragments_num(Map_State, Number_of_Pixels_1D) > 0) // local area break
                     {
-                        switch (node->type)
+                        auto_cut_state = 1;
+                    }
+                    else // open "coverage" extension
+                    {
+                        if (!Extensions.head) break;
+                        TraverseLinkedList(Extensions.head, extension_node)
                         {
-                        case extension_graph:
-                        {
-
-                            graph *gph = (graph *)node->extension;
-                            if (strcmp((char *)gph->name, "coverage") == 0)
+                            switch (node->type)
                             {
-                                gph->on = !gph->on;
-                                break;
+                            case extension_graph:
+                            {
+
+                                graph *gph = (graph *)node->extension;
+                                if (strcmp((char *)gph->name, "coverage") == 0)
+                                {
+                                    gph->on = !gph->on;
+                                    break;
+                                }
+                            }
                             }
                         }
-                        }
                     }
+                    
                     break;
 
                 case GLFW_KEY_D:
@@ -7025,6 +7476,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_F:
+                    keyPressed = ToggleSelectSortAreaMode(window);
                     break;
 
                 case GLFW_KEY_G:
@@ -7059,7 +7511,6 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_K:
-                    keyPressed = ToggleSelectSortAreaMode(window);
                     break;
 
                 case GLFW_KEY_L:
@@ -7139,7 +7590,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     }
                     else if (Select_Sort_Area_Mode)
                     {
-                        auto_curation_state.clear();
+                        auto_curation_state.clear(); // clear the selected area
                     }
                     else
                     {
@@ -7202,6 +7653,10 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_Z:
+                    if (Select_Sort_Area_Mode)
+                    {
+                        auto_cut_state = 2; // restore the cutted frags within the selected area
+                    }
                     break;
 
                 case GLFW_KEY_SPACE:
@@ -7250,11 +7705,10 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     }
                     else if (Select_Sort_Area_Mode && action == GLFW_PRESS)
                     {   
-                        std::vector<u32> frags_id;
-                        auto_curation_state.get_selected_fragments(frags_id, Map_State, Number_of_Pixels_1D);
-                        if (frags_id.size() >= 2)
+                        u32 selected_frag_num = auto_curation_state.get_selected_fragments_num(Map_State, Number_of_Pixels_1D);
+                        if (selected_frag_num >= 2)
                         {
-                            Yahs_sorting = 1;
+                            auto_sort_state = 1;
                         }
                     }
                     else
@@ -7288,6 +7742,10 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                         }
 
                     }
+                    else if (Select_Sort_Area_Mode)
+                    {
+                        auto_curation_state.change_sort_mode(-1);
+                    }
                     else AdjustColorMap(-1);
                     break;
 
@@ -7305,15 +7763,28 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             }
                         }
                     }
+                    else if (Select_Sort_Area_Mode)
+                    {
+                        auto_curation_state.change_sort_mode(1);
+                    }
                     else AdjustColorMap(1);
                     break;
 
                 case GLFW_KEY_UP:
-                    NextColorMap(1);
+                    if (Select_Sort_Area_Mode)
+                    {
+                        auto_curation_state.adjust_cut_threshold(1);
+                    }
+                    else NextColorMap(1);
                     break;
 
                 case GLFW_KEY_DOWN:
-                    NextColorMap(-1);
+                    if (Select_Sort_Area_Mode)
+                    {
+                        auto_curation_state.adjust_cut_threshold(-1);
+                    }
+                    else 
+                        NextColorMap(-1);
                     break;
 #ifdef Internal
                 case GLFW_KEY_ESCAPE:
@@ -8141,24 +8612,28 @@ resources, click each entry to view its licence.)text";
 global_function void
 UserSaveState(const char *, u08, char *);
 
+global_function
+void
+default_user_profile_settings () ;
+
 global_variable char
-    profile_savebuff[1024] = {0};
+profile_savebuff[1024] = {0};
 
 global_function
-    u08
-    UserProfileEditorRun(const char *name, struct file_browser *browser, struct nk_context *ctx, u32 show, u08 save = 0)
+u08
+UserProfileEditorRun(const char *name, struct file_browser *browser, struct nk_context *ctx, u32 show, u08 save = 0)
 {
     struct nk_window *window = nk_window_find(ctx, name);
     u32 doesExist = window != 0;
 
-    if (!show && !doesExist)
+    if (!show && !doesExist) // 不显示 且 不存在
     {
         return (0);
     }
 
-    if (show && doesExist && (window->flags & NK_WINDOW_HIDDEN))
+    if (show && doesExist && (window->flags & NK_WINDOW_HIDDEN))  // 显示 且 存在 且 隐藏
     {
-        window->flags &= ~(nk_flags)NK_WINDOW_HIDDEN;
+        window->flags &= ~(nk_flags)NK_WINDOW_HIDDEN;  // 取消隐藏
         FileBrowserReloadDirectoryContent(browser, browser->directory);
     }
 
@@ -8172,11 +8647,28 @@ global_function
 
         nk_layout_row_dynamic(ctx, Screen_Scale.y * 30.0f, 1);
 
-        if (nk_button_label(ctx, "Save"))
+        if (nk_button_label(ctx, "Save") && window && !(window->flags & NK_WINDOW_HIDDEN))
         {
-            UserSaveState("userprofile", 1, 0);
+            ret = 2;
         }
 
+        if (nk_button_label(ctx, "Default") && window && !(window->flags & NK_WINDOW_HIDDEN))
+        {
+            default_user_profile_settings(); 
+            ret = 2;
+        }
+
+        // invert mouse setting
+        nk_layout_row_dynamic(ctx, Screen_Scale.y * 30.0f, 4);
+        bool original_value = user_profile_settings_ptr->invert_mouse;
+        nk_checkbox_label(NK_Context, "Invert Mouse Buttons", (int*)&user_profile_settings_ptr->invert_mouse);
+        if (original_value != user_profile_settings_ptr->invert_mouse)
+        {   
+            fmt::print("[UserPofile]: Mouse_invert settings changed ({}) -> ({})\n", original_value, user_profile_settings_ptr->invert_mouse);
+            ret = 2;
+        }
+        
+        // extensions
         nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 4);
 
         if (Extensions.head)
@@ -8365,13 +8857,35 @@ global_function
             nk_tree_pop(NK_Context);
         }
 
+
+        // select the color for the selected area
+        if (nk_tree_push(NK_Context, NK_TREE_TAB, "Colour Selected Area", NK_MINIMIZED))
+        {
+            struct nk_colorf colour_bg = {
+                auto_curation_state.mask_color[0], 
+                auto_curation_state.mask_color[1], 
+                auto_curation_state.mask_color[2], 
+                auto_curation_state.mask_color[3]};
+            nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 200.0f, 4);
+            colour_bg = nk_color_picker(NK_Context, colour_bg, NK_RGBA);
+            auto_curation_state.mask_color[0] = colour_bg.r;
+            auto_curation_state.mask_color[1] = colour_bg.g;
+            auto_curation_state.mask_color[2] = colour_bg.b;
+            auto_curation_state.mask_color[3] = colour_bg.a;
+            nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30, 4);
+            if (nk_button_label(NK_Context, "Default")) 
+            {
+                auto_curation_state.set_mask_color(auto_curation_state.mask_color_default);
+            }
+            nk_tree_pop(NK_Context);
+        }
         // nk_tree_pop(NK_Context); // used to have this here, but it was causing a crash
 
         nk_style_set_font(ctx, &NK_Font->handle);
     }
     nk_end(ctx);
 
-    return (ret);
+    return ret; 
 }
 
 
@@ -8565,9 +9079,19 @@ global_variable
 u08
 SaveState_Magic_Tail_Manual = 3;
 
+/* 
+保存当前状态，
+    headerHash: 用于生成文件名的哈希值
+    path: 保存路径
+    overwrite: 是否覆盖
+    version: 版本号，用于控制生成文件的版本，兼容上一个版本
+*/
 global_function
 u08
-SaveState(u64 headerHash, char *path = 0, u08 overwrite = 0)
+SaveState(
+    u64 headerHash, char *path = 0, u08 overwrite = 0, 
+    u32 version = 0
+)
 {
     if (!path)
     {
@@ -8608,7 +9132,8 @@ SaveState(u64 headerHash, char *path = 0, u08 overwrite = 0)
                     break;
             }
         }
-
+        
+        // number of scaffs and metaFlags
         u32 nScaffs = 0;
         u32 nMetaFlags = 0;
         ForLoop(Contigs->numberOfContigs)
@@ -8616,7 +9141,7 @@ SaveState(u64 headerHash, char *path = 0, u08 overwrite = 0)
             if ((Contigs->contigs_arr + index)->scaffId) ++nScaffs;
             if (*(Contigs->contigs_arr + index)->metaDataFlags) ++nMetaFlags;
         }
-        
+        // number of meta tags
         u08 nMetaTags = 0;
         u32 totalMetaTagSpace = 0;
         ForLoop(ArrayCount(Meta_Data->tags))
@@ -8645,7 +9170,7 @@ SaveState(u64 headerHash, char *path = 0, u08 overwrite = 0)
             settings |= Grid->on ? (1 << 3) : 0;
             settings |= Contig_Ids->on ? (1 << 4) : 0;
             settings |= Tool_Tip->on ? (1 << 5) : 0;
-            settings |= Mouse_Invert ? (1 << 6) : 0;
+            settings |= user_profile_settings_ptr->invert_mouse ? (1 << 6) : 0;
             settings |= Scaffs_Always_Visible ? (1 << 7) : 0;
 
             *fileWriter++ = settings;
@@ -8970,8 +9495,10 @@ SaveState(u64 headerHash, char *path = 0, u08 overwrite = 0)
 
         if (!path) // save the name SaveState_Name to file named as ptlsn 
         {
-            u08 nameCache[17];
-            CopyNullTerminatedString((u08 *)SaveState_Name, (u08 *)nameCache);
+            // u08 nameCache[17];
+            // CopyNullTerminatedString((u08 *)SaveState_Name, (u08 *)nameCache);
+
+            std::string nameCache_string = std::string((char *)SaveState_Name);
 
             *(SaveState_Name + 0) = 'p';
             *(SaveState_Name + 1) = 't';
@@ -8981,7 +9508,8 @@ SaveState(u64 headerHash, char *path = 0, u08 overwrite = 0)
             *(SaveState_Name + 5) = '\0';
 
             file = fopen((const char *)SaveState_Path, "wb");
-            fwrite((u08 *)nameCache, 1, sizeof(nameCache), file);
+            // fwrite((u08 *)nameCache, 1, sizeof(nameCache), file);
+            fwrite((u08 *)nameCache_string.c_str(), 1, nameCache_string.size(), file);
             fclose(file);
         }
     }
@@ -9187,7 +9715,7 @@ LoadState(u64 headerHash, char *path)
                 Grid->on = settings & (1 << 3);
                 Contig_Ids->on = settings & (1 << 4);
                 Tool_Tip->on = settings & (1 << 5);
-                Mouse_Invert = settings & (1 << 6);
+                // user_profile_settings_ptr->invert_mouse = settings & (1 << 6); // this is moved to the user settings, then this setting will not be influnced by clearcache
                 Scaffs_Always_Visible = settings & (1 << 7);
 
                 nBytesRead += 2;
@@ -9545,7 +10073,7 @@ restore_initial_state()
         Grid->on                 = 1;
         Contig_Ids->on           = 1;
         Tool_Tip->on             = 1;
-        Mouse_Invert             = 0;
+        // user_profile_settings_ptr   = 0;
         Scaffs_Always_Visible    = 1;
         MetaData_Always_Visible  = 1;
 
@@ -9638,6 +10166,12 @@ restore_initial_state()
         u32 nEdits  = my_Min(Edits_Stack_Size, Map_Editor->nEdits);
         ForLoop(nEdits) UndoMapEdit();
     }
+    
+    // restore all the splited contigs
+    {
+        Map_State->restore_cutted_contigs_all(Number_of_Pixels_1D);
+    }
+
 
     // waypoints
     {   
@@ -9806,6 +10340,47 @@ UserSetSaveStatePaths()
     }
 }
 
+
+
+
+// default user profile settings
+global_function
+void 
+default_user_profile_settings()
+{   
+    // metadata tags color profile
+    meta_outline->on = 1;
+
+    // background color
+    active_bgcolor = 0;
+
+    // color map order
+    useCustomOrder = 1;
+    userColourMapOrder.nMaps = Color_Maps->nMaps;
+    for (u32 i = 0; i < Color_Maps->nMaps; i++)
+    {
+        userColourMapOrder.order[i] = i;
+    }
+
+    // select area color
+    auto_curation_state.set_default_mask_color();
+
+    // invert mouse
+    if (user_profile_settings_ptr)
+    {
+        user_profile_settings_ptr->invert_mouse = false;
+    }
+
+    // Grey out settings
+    if (Grey_Out_Settings)
+    {   
+        delete Grey_Out_Settings;
+        Grey_Out_Settings = new GreyOutSettings(Meta_Data);
+    }
+    return ;
+}
+
+
 global_function void
 UserSaveState(const char *headerHash = "userprofile", u08 overwrite = 1, char *path = 0)
 {
@@ -9888,6 +10463,33 @@ UserSaveState(const char *headerHash = "userprofile", u08 overwrite = 1, char *p
     fwrite(&useCustomOrder, sizeof(useCustomOrder), 1, file);
     fwrite(&userColourMapOrder.nMaps, sizeof(userColourMapOrder.nMaps), 1, file);
     fwrite(userColourMapOrder.order, sizeof(u32), userColourMapOrder.nMaps, file);
+
+    // save selected area color 
+    fwrite(&auto_curation_state.mask_color, sizeof(auto_curation_state.mask_color), 1, file);
+
+    // save grey out flags
+    if (Grey_Out_Settings)
+    {
+        fwrite(Grey_Out_Settings->grey_out_flags, sizeof(int32_t), 64, file);
+    }
+    else
+    {
+        int32_t grey_out_flags[64] = {0};
+        fwrite(grey_out_flags, sizeof(int32_t), 64, file);
+    }
+
+    // save user profile settings
+    if (user_profile_settings_ptr)
+    {
+        fwrite(&user_profile_settings_ptr->invert_mouse, sizeof(bool), 1, file);
+    }
+    else 
+    {   
+        bool invert_mouse_tmp = false;
+        fwrite(&invert_mouse_tmp, sizeof(bool), 1, file);
+    }
+
+    // END of SAVE user profile settings
 
     fclose(file);
 
@@ -10000,6 +10602,39 @@ global_function
     fread(&userColourMapOrder.nMaps, sizeof(userColourMapOrder.nMaps), 1, file);
     fread(userColourMapOrder.order, sizeof(u32), userColourMapOrder.nMaps, file);
 
+    // load selected area color 
+    f32 tmp_mask_color[4];
+    if (fread(tmp_mask_color, sizeof(tmp_mask_color), 1, file) == 1)
+    {
+        auto_curation_state.set_mask_color(tmp_mask_color);
+    }
+    else 
+    {
+        auto_curation_state.set_mask_color(auto_curation_state.mask_color_default);
+    }
+
+    // load grey out flags
+    int32_t grey_out_flags[64];
+    if (fread(grey_out_flags, sizeof(int32_t), 64, file) == 64)
+    {   
+        if (Grey_Out_Settings)
+        {
+            memcpy(Grey_Out_Settings->grey_out_flags, grey_out_flags, 64 * sizeof(int32_t));
+        }
+    }
+
+    // load user profile settings
+    bool invert_mouse_tmp;
+    if (fread(&invert_mouse_tmp, sizeof(bool), 1, file) == 1)
+    {
+        if (user_profile_settings_ptr)
+        {
+            user_profile_settings_ptr->invert_mouse = invert_mouse_tmp;
+        }
+    }
+
+
+
     fclose(file);
     return 0; // Success
 }
@@ -10060,9 +10695,9 @@ CopyEditsToClipBoard(GLFWwindow *window)
 
             u32 oldFrom = Map_State->contigRelCoords[start];
             u32 oldTo = Map_State->contigRelCoords[end];
-            u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-            u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-            u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+            u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
+            u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
+            u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
 
             bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n",
                     index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -10080,7 +10715,14 @@ CopyEditsToClipBoard(GLFWwindow *window)
 global_function
 void
 GenerateAGP(char *path, u08 overwrite, u08 formatSingletons, u08 preserveOrder)
-{
+{   
+
+    // 这里粘贴所有的original contigs
+    u32* tmp_orignal_contig_ids = new u32[Number_of_Pixels_1D];
+    for (u32 i = 0 ; i< Number_of_Pixels_1D; i++ )tmp_orignal_contig_ids[i] = Map_State->originalContigIds[i];
+    Map_State->restore_cutted_contigs_all(Number_of_Pixels_1D);
+    UpdateContigsFromMapState(); // todo 检查粘贴后会不会影响 painted 的 scaffolds
+
     FILE *file;
     if (!overwrite && (file = fopen((const char *)path, "rb")))
     {
@@ -10124,7 +10766,7 @@ GenerateAGP(char *path, u08 overwrite, u08 formatSingletons, u08 preserveOrder)
                 u64 contRealEndCoord = (u64)((f64)(startCoord + cont->length) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length);
                 u64 contRealSize = contRealEndCoord - contRealStartCoord + 1;
 
-                char *contName = (char *)((Original_Contigs + cont->originalContigId)->name);
+                char *contName = (char *)((Original_Contigs + cont->get_original_contig_id())->name);
 
                 if (cont->scaffId && !type)
                 {
@@ -10185,6 +10827,12 @@ GenerateAGP(char *path, u08 overwrite, u08 formatSingletons, u08 preserveOrder)
 
         fclose(file);
     }
+
+    // 把临时切开的再粘贴上
+    for (u32 i = 0; i < Number_of_Pixels_1D; i++) Map_State->originalContigIds[i] = tmp_orignal_contig_ids[i]; 
+    UpdateContigsFromMapState();
+    delete[] tmp_orignal_contig_ids;
+    return;
 }
 
 
@@ -10266,7 +10914,8 @@ void SortMapByMetaTags(u64 tagMask)
 }
 
 
-MainArgs {
+MainArgs 
+{
     u32 initWithFile = 0;   // initialization with .map file or not 
     u08 currFile[256];      // save the name of file inputed 
     u08 *currFileName = 0;
@@ -10456,11 +11105,19 @@ MainArgs {
             Redisplay = 1;
         }
 
-        if (Yahs_sorting)
+        if (auto_sort_state)
         {
             if (currFileName) SaveState(headerHash);
-            Sort_yahs((char*)currFileName);
-            Yahs_sorting = 0;
+            auto_sort_func((char*)currFileName);
+            auto_sort_state = 0;
+            Redisplay = 1;
+        }
+
+        if (auto_cut_state)
+        {   
+            if (currFileName) SaveState(headerHash);
+            auto_cut_func((char*)currFileName, Loading_Arena);
+            auto_cut_state = 0;
             Redisplay = 1;
         }
 
@@ -10533,7 +11190,7 @@ MainArgs {
             {
                 static nk_flags flags = NK_WINDOW_BORDER | NK_WINDOW_SCALABLE | NK_WINDOW_MOVABLE | NK_WINDOW_SCROLL_AUTO_HIDE | NK_WINDOW_TITLE;
 
-                if (nk_begin_titled(NK_Context, "Options", currFileName ? (const char *)currFileName : "", nk_rect(Screen_Scale.x * 10, Screen_Scale.y * 10, Screen_Scale.x * 800, Screen_Scale.y * 350), flags))
+                if (nk_begin_titled(NK_Context, "Options", currFileName ? (const char *)currFileName : "", nk_rect(Screen_Scale.x * 10, Screen_Scale.y * 10, Screen_Scale.x * 800, Screen_Scale.y * 600), flags))
                 {
                     struct nk_rect bounds = nk_window_get_bounds(NK_Context);
                     bounds.w /= 8;
@@ -10566,15 +11223,13 @@ MainArgs {
                     showUserProfileScreen = nk_button_label(NK_Context, "User Profile");
                     showAboutScreen = nk_button_label(NK_Context, "About");
 
-                    // AI & YaHS sort button 
+                    // AI & Pixel Sort button 
                     struct nk_color sort_button_normal = nk_rgb(153, 50, 204); 
                     struct nk_color sort_button_hover  = nk_rgb(186, 85, 211); 
                     struct nk_color sort_button_active = nk_rgb(128, 0, 128);  
                     push_nk_style(NK_Context, sort_button_normal, sort_button_hover, sort_button_active);
                     nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 3);
-                    // ai_sort_button = nk_button_label(NK_Context, "AI Sort");
-                    bounds = nk_widget_bounds(NK_Context);
-                    yahs_sort_button = nk_button_label(NK_Context, "YaHS Sort");
+
                     // AI sort button
                     /*
                     {
@@ -10617,18 +11272,86 @@ MainArgs {
                         }
                     }
                     */
-                    // YaHS sort button
-                    {   
-                        if (yahs_sort_button) 
+                    // Pixel Cut
+                    {
+                        bounds = nk_widget_bounds(NK_Context);
+                        auto_cut_button = nk_button_label(NK_Context, "Pixel Cut");
+
+                        if (auto_cut_button && currFileName)
                         {
-                            Yahs_sorting = 1;
-                            auto_curation_state.clear();
+                            auto_cut_state = 1;
+                            auto_curation_state.clear(); // if click the button, the sort/cut will be applied globally
+                        }
+                        // window to set the parameters for cut
+                        if (nk_contextual_begin(NK_Context, 0, nk_vec2(Screen_Scale.x * 480, Screen_Scale.y * 800), bounds))
+                        {   
+                            nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
+
+                            nk_label(NK_Context, "Cut threshold (default: 0.05)", NK_TEXT_LEFT);
+                            nk_edit_string_zero_terminated(
+                                NK_Context, 
+                                NK_EDIT_FIELD, 
+                                (char*)auto_curation_state.auto_cut_threshold_buf, 
+                                sizeof(auto_curation_state.auto_cut_threshold_buf), 
+                                nk_filter_float);
+                            
+                            nk_label(NK_Context, "Pixel_mean window size (default: 8)", NK_TEXT_LEFT); //  见鬼了，见鬼了，这个地方，如果我使用 "Pixel_mean windows (default: 8)" 点击弹出的窗口外面程序就会卡死，但是使用"Pixel_mean window size (default: 8)" 就不会卡死
+                            nk_edit_string_zero_terminated(
+                                NK_Context, 
+                                NK_EDIT_FIELD, 
+                                (char*)auto_curation_state.auto_cut_diag_window_for_pixel_mean_buf, 
+                                sizeof(auto_curation_state.auto_cut_diag_window_for_pixel_mean_buf), 
+                                nk_filter_decimal);
+
+                            nk_label(NK_Context, "Smallest frag size (default: 8)", NK_TEXT_LEFT);
+                            nk_edit_string_zero_terminated(
+                                NK_Context, 
+                                NK_EDIT_FIELD, 
+                                (char*)auto_curation_state.auto_cut_smallest_frag_size_in_pixel_buf, 
+                                sizeof(auto_curation_state.auto_cut_smallest_frag_size_in_pixel_buf), 
+                                nk_filter_decimal);
+
+                            nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
+                            if (nk_button_label(NK_Context, "Cancel")) 
+                            {   
+                                printf("[Pixel Cut] Cancel button clicked\n");
+                                auto_curation_state.set_buf();
+                                nk_contextual_close(NK_Context);
+                            }
+                            if (nk_button_label(NK_Context, "Apply")) 
+                            {
+                                // Apply changes
+                                // Convert text to integer and float
+                                auto_curation_state.update_value_from_buf(); // todo 这里还有问题，因为设置了pixel_mean之后 并没有重新计算 pixel_density...
+                                
+                                nk_contextual_close(NK_Context);
+
+                                auto_curation_state.set_buf();
+                                fmt::print("[Pixel Cut] cut_threshold:               {:.3f}\n", auto_curation_state.auto_cut_threshold);
+                                fmt::print("[Pixel Cut] pixel mean window size:      {}\n", auto_curation_state.auto_cut_diag_window_for_pixel_mean);
+                                fmt::print("[Pixel Cut] smallest_frag_size_in_pixel: {}\n", auto_curation_state.auto_cut_smallest_frag_size_in_pixel);
+                            }
+
+                            nk_contextual_end(NK_Context);
+
+                            
+                        }
+                    }
+
+                    // Pixel Sort button
+                    bounds = nk_widget_bounds(NK_Context);
+                    auto_sort_button = nk_button_label(NK_Context, "Pixel Sort");
+                    {   
+                        if (auto_sort_button && currFileName) 
+                        {
+                            auto_sort_state = 1;
+                            auto_curation_state.clear(); // if click the button, the sort/cut will be applied globally
                         }
                         // window to set the parameters for sort
                         if (nk_contextual_begin(NK_Context, 0, nk_vec2(Screen_Scale.x * 480, Screen_Scale.y * 400), bounds))
                         {
                             nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
-                            nk_label(NK_Context, "Smallest Frag Size (pixels):", NK_TEXT_LEFT);
+                            nk_label(NK_Context, "Smallest Frag Size (default: 2)", NK_TEXT_LEFT);
                             nk_edit_string_zero_terminated(
                                 NK_Context, 
                                 NK_EDIT_FIELD, 
@@ -10636,7 +11359,7 @@ MainArgs {
                                 sizeof(auto_curation_state.frag_size_buf), 
                                 nk_filter_decimal);
 
-                            nk_label(NK_Context, "Link Score Threshold:", NK_TEXT_LEFT);
+                            nk_label(NK_Context, "Link threshold (default: 0.4)", NK_TEXT_LEFT);
                             nk_edit_string_zero_terminated(
                                 NK_Context, 
                                 NK_EDIT_FIELD, 
@@ -10660,36 +11383,38 @@ MainArgs {
                                 auto_curation_state.sort_mode = 2;
                             }
 
+                            // if (nk_option_label(NK_Context, "YaHS", auto_curation_state.sort_mode == 3)) 
+                            // {
+                            //     auto_curation_state.sort_mode = 3;
+                            // }
+
                             nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
                             if (nk_button_label(NK_Context, "Cancel")) 
                             {   
-                                printf("[YaHS Sort] Cancel button clicked\n");
+                                printf("[Pixel Sort] Cancel button clicked\n");
+                                auto_curation_state.set_buf();
                                 nk_contextual_close(NK_Context);
                             }
                             if (nk_button_label(NK_Context, "Apply")) 
                             {
                                 // Apply changes
                                 // Convert text to integer and float
-                                auto_curation_state.smallest_frag_size_in_pixel = (u32)atoi((char*)auto_curation_state.frag_size_buf);
-                                auto_curation_state.link_score_threshold = (float)atof((char*)auto_curation_state.score_threshold_buf);
+                                auto_curation_state.update_value_from_buf();
+
                                 nk_contextual_close(NK_Context);
-                                if (auto_curation_state.link_score_threshold > 1.0f || auto_curation_state.link_score_threshold < 0.0f) 
-                                {   
-                                    printf("[YaHS Sort] Warning: link Score Threshold should be in the range of [0, 1]\n");
-                                    auto_curation_state.link_score_threshold = std::max(0.0f, std::min(1.0f, auto_curation_state.link_score_threshold));
-                                }
+
                                 auto_curation_state.set_buf();
-                                printf("[YaHS Sort] smallest_frag_size_in_pixel: %d\n", auto_curation_state.smallest_frag_size_in_pixel);
-                                printf("[YaHS Sort] link_score_threshold:        %.3f\n", auto_curation_state.link_score_threshold);
-                                printf("[YaHS Sort] Sort mode:                   %s\n", auto_curation_state.get_sort_mode_name().c_str());
+                                fmt::print("[Pixel Sort] smallest_frag_size_in_pixel: {}\n", auto_curation_state.smallest_frag_size_in_pixel);
+                                fmt::print("[Pixel Sort] link_score_threshold:        {:.3f}\n", auto_curation_state.link_score_threshold);
+                                fmt::print("[Pixel Sort] Sort mode:                   {}\n", auto_curation_state.get_sort_mode_name());
                             }
                             // redo all the changes
-                            if (!auto_curation_state.show_yahs_redo_confirm_popup)
+                            if (!auto_curation_state.show_autoSort_redo_confirm_popup)
                             {
                                 nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
                                 if (nk_button_label(NK_Context, "Redo All (Careful!)")) 
                                 {   
-                                    auto_curation_state.show_yahs_redo_confirm_popup=true;
+                                    auto_curation_state.show_autoSort_redo_confirm_popup=true;
                                 }
                             } else
                             {
@@ -10698,22 +11423,22 @@ MainArgs {
                                 nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
                                 if (nk_button_label(NK_Context, "Yes")) 
                                 {
-                                    auto_curation_state.show_yahs_redo_confirm_popup=false;
-                                    printf("[YaHS Sort] Redo all edits.\n");
+                                    auto_curation_state.show_autoSort_redo_confirm_popup=false;
+                                    printf("[Pixel Sort] Redo all edits.\n");
                                     RedoAllEdits(Map_Editor);
                                 }
                                 if (nk_button_label(NK_Context, "No")) 
                                 {
-                                    auto_curation_state.show_yahs_redo_confirm_popup=false;
+                                    auto_curation_state.show_autoSort_redo_confirm_popup=false;
                                 }
                             }
                             // reject all the edits
-                            if (!auto_curation_state.show_yahs_erase_confirm_popup)
+                            if (!auto_curation_state.show_autoSort_erase_confirm_popup)
                             {   
                                 nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
                                 if (nk_button_label(NK_Context, "Erase All (Careful!)")) 
                                 {   
-                                    auto_curation_state.show_yahs_erase_confirm_popup=true;
+                                    auto_curation_state.show_autoSort_erase_confirm_popup=true;
                                 }
                             } else
                             {
@@ -10722,19 +11447,19 @@ MainArgs {
                                 nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
                                 if (nk_button_label(NK_Context, "Yes")) 
                                 {
-                                    auto_curation_state.show_yahs_erase_confirm_popup=false;
-                                    printf("[YaHS Sort] Erase all edits.\n");
+                                    auto_curation_state.show_autoSort_erase_confirm_popup=false;
+                                    printf("[Pixel Sort] Erase all edits.\n");
                                     EraseAllEdits(Map_Editor);
                                 }
                                 if (nk_button_label(NK_Context, "No")) 
                                 {
-                                    auto_curation_state.show_yahs_erase_confirm_popup=false;
+                                    auto_curation_state.show_autoSort_erase_confirm_popup=false;
                                 }
                             }
                             nk_contextual_end(NK_Context);
                         }
                     }
-                    pop_nk_style(NK_Context, 3);
+                    pop_nk_style(NK_Context, 3); // pop the style for Pixel Cut and Pixel Sort button
 
                     // waypoint edit mode
                     nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 3);
@@ -11024,11 +11749,49 @@ MainArgs {
 
                         nk_contextual_end(NK_Context);
                     }
+                    
+                    bool original_value = user_profile_settings_ptr->invert_mouse;
+                    nk_checkbox_label(NK_Context, "Invert Mouse Buttons", (int*)&user_profile_settings_ptr->invert_mouse);
+                    if (original_value != user_profile_settings_ptr->invert_mouse)
+                    {   
+                        fmt::print("[UserPofile]: Mouse_invert settings changed ({}) -> ({})\n", original_value, user_profile_settings_ptr->invert_mouse);
+                        UserSaveState();
+                    }
+                    
 
-                    Mouse_Invert = nk_check_label(NK_Context, "Invert Mouse Buttons", (s32)Mouse_Invert) ? 1 : 0;
+                    // select current active tag
+                    if (nk_tree_push(NK_Context, NK_TREE_TAB, "Select Active Tag", NK_MINIMIZED))
+                    {
+                        nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 20.0f, 4);
+                        for (u32 i = 0; i < ArrayCount(Meta_Data->tags); i ++ )
+                        {   
+                            if (*Meta_Data->tags[i] == 0) break;
+                            int tmp = ( MetaData_Active_Tag == i) ; 
+                            tmp = nk_check_label(NK_Context, (char*)Meta_Data->tags[i], tmp);
+                            if (tmp) MetaData_Active_Tag = i;
+                        }
+                        nk_tree_pop(NK_Context);
+                    }
 
-                    nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
-                    Grey_Haplotigs = nk_check_label(NK_Context, "Grey out 'Haplotig'", (s32)Grey_Haplotigs) ? 1 : 0;
+                    // grey out settings
+                    if (nk_tree_push(NK_Context, NK_TREE_TAB, "Grey Out Tags", NK_MINIMIZED))
+                    {
+                        nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 20.0f, 4);
+                        for (u32 i = 0; i < ArrayCount(Meta_Data->tags); i ++ )
+                        {   
+                            if (*Meta_Data->tags[i] == 0) break;
+                            s32 tmp = Grey_Out_Settings->grey_out_flags[i];
+                            nk_checkbox_label(NK_Context, (char*)Meta_Data->tags[i], Grey_Out_Settings->grey_out_flags+i);
+                            if (tmp!=Grey_Out_Settings->grey_out_flags[i]) 
+                            {
+                                fmt::print("[UserPofile]: Grey out tags changed\n");
+                                UserSaveState();
+                            }
+                        }
+                        nk_tree_pop(NK_Context);
+                    }
+
+
 
                     nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
                     nk_label(NK_Context, "Gamma Min", NK_TEXT_LEFT);
@@ -11115,7 +11878,7 @@ MainArgs {
                         static int tree_state = 0;
 
                         // Tree tab for checkboxes
-                        if (nk_tree_push(NK_Context, NK_TREE_TAB, "Select Tags", NK_MINIMIZED))
+                        if (nk_tree_push(NK_Context, NK_TREE_TAB, "Select Tags Move to End", NK_MINIMIZED))
                         {
                             nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 20.0f, 4); // Adjust layout for checkboxes
                             for (int i = 0; i < NUM_TAGS; i++)
@@ -11128,7 +11891,7 @@ MainArgs {
                         }
 
                         nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 3); // Layout for buttons
-                        if (nk_button_label(NK_Context, "Sort Selected"))
+                        if (nk_button_label(NK_Context, "Move Selected"))
                         {
                             if (!sortMetaEdits)
                             {
@@ -11143,7 +11906,7 @@ MainArgs {
                                 SortMapByMetaTags(tag_mask); // Pass the tag mask to the sorting function
                             }
                         }
-                        if (nk_button_label(NK_Context, "Sort All Tags"))
+                        if (nk_button_label(NK_Context, "Move All Tags"))
                         {
                             if (!sortMetaEdits)
                             {
@@ -11151,7 +11914,7 @@ MainArgs {
                                 SortMapByMetaTags(all_tags_mask);
                             }
                         }
-                        if (nk_button_label(NK_Context, "Undo Sort"))
+                        if (nk_button_label(NK_Context, "Undo Move"))
                         {
                             while (sortMetaEdits)
                             {
@@ -11220,9 +11983,9 @@ MainArgs {
 
                                     u32 oldFrom = Map_State->contigRelCoords[start];
                                     u32 oldTo = Map_State->contigRelCoords[end];
-                                    u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-                                    u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-                                    u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+                                    u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
+                                    u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
+                                    u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
                                     
                                     stbsp_snprintf((char *)buff, sizeof(buff), "Edit %d:", index + 1);
                                     nk_label(NK_Context, (const char *)buff, NK_TEXT_LEFT);
@@ -11334,9 +12097,10 @@ MainArgs {
                         }
 
                         // Input Sequences
-                        {
+                        {   
+                            std::string input_sequence_name = fmt::format("Input Sequences ({})", Number_of_Original_Contigs);
                             nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
-                            if (nk_tree_push(NK_Context, NK_TREE_TAB, "Input Sequences", NK_MINIMIZED))
+                            if (nk_tree_push(NK_Context, NK_TREE_TAB, input_sequence_name.c_str(), NK_MINIMIZED))
                             {   
                                 nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 3);
                                 nk_label(NK_Context, "Search: ", NK_TEXT_LEFT);
@@ -11431,7 +12195,7 @@ MainArgs {
                                                     u32 startCoord = cont->startCoord;
                                                     u32 endCoord = IsContigInverted(index2) ? (startCoord - cont->length + 1) : (startCoord + cont->length);
 
-                                                    stbsp_snprintf((char *)buff, sizeof(buff), "%s [%$" PRIu64 "bp to %$" PRIu64 "bp]", (char *)((Original_Contigs + cont->originalContigId)->name), (u64)((f64)startCoord / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length), (u64)((f64)(endCoord) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length));
+                                                    stbsp_snprintf((char *)buff, sizeof(buff), "%s [%$" PRIu64 "bp to %$" PRIu64 "bp]", (char *)((Original_Contigs + cont->get_original_contig_id())->name), (u64)((f64)startCoord / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length), (u64)((f64)(endCoord) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length));
                                                     if (nk_button_label(NK_Context, (char *)buff))
                                                     {
                                                         f32 p = pos + (0.5f * contLen);
@@ -11600,7 +12364,9 @@ MainArgs {
                 u08 state;
                 if ((state = UserProfileEditorRun("User profile editor", &saveBrowser, NK_Context, (u32)showUserProfileScreen, 1)))
                 {
-                    UserSaveState("trial", state & 2, saveBrowser.file);
+                    if (showUserProfileScreen) 
+                        fmt::print("[UserPofile]: showUserProfileScreen = {} \n", showUserProfileScreen);
+                    UserSaveState("userprofile", state & 2, 0); // save the user profile settings
                     FileBrowserReloadDirectoryContent(&saveBrowser, saveBrowser.directory);
                 }
 
@@ -11651,6 +12417,35 @@ MainArgs {
     // and memory allocated  by new or malloc
     delete[] Contact_Matrix->vaos;
     delete[] Contact_Matrix->vbos;
+    if (Grey_Out_Settings) 
+    {
+        delete Grey_Out_Settings; Grey_Out_Settings = nullptr;
+    }
+    if (user_profile_settings_ptr)
+    {
+        delete user_profile_settings_ptr; user_profile_settings_ptr = nullptr;
+    }
+
+    if (pixel_density_extension)
+    {
+        delete pixel_density_extension; pixel_density_extension = nullptr;
+    }
+
+    if (textures_array_ptr)
+    {
+        delete textures_array_ptr; textures_array_ptr = nullptr;
+    }
+
+    if (frag_cut_cal_ptr)
+    {
+        delete frag_cut_cal_ptr; frag_cut_cal_ptr = nullptr;
+    }
+
+    if (frag_sort_method) 
+    {
+        delete frag_sort_method; frag_sort_method = nullptr;
+    }
+
     ResetMemoryArenaP(Loading_Arena);
     fprintf(stdout, "Memory freed for the arena.\n");
 
