@@ -18,14 +18,27 @@ jobs:
             target_arch: arm64
           - os: ubuntu-latest
             target_arch: arm64
+        include:
+          - os: macos-latest
+            target_arch: x86_64
+            runs-on: macos-13
+          - os: macos-latest
+            target_arch: arm64
+            runs-on: macos-latest
 
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.runs-on || matrix.os }}
     steps:
       - name: Check runner OS
         run: echo "Runner OS is ${{ runner.os }}"
 
       - name: Checkout code
         uses: actions/checkout@v2
+
+      - name: Install NSIS on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          choco install nsis -y --no-progress
 
       - name: install GL and x11 for Linux
         if: runner.os == 'Linux'

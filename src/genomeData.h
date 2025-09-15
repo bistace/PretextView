@@ -28,8 +28,8 @@ SOFTWARE.
 #include "utilsPretextView.h"
 #include "showWindowData.h"
 
-
-#define Max_Number_of_Contigs 4096
+// NOTE: if the number exceed this value, the contig  counted as  N % 16384, for example, contig 16384 will be counted as 0, 16385 1, 16386 as 2
+#define Max_Number_of_Contigs 16384 // 16384 // originally 4096 
 
 struct
 file_atlas_entry
@@ -54,8 +54,7 @@ struct contact_matrix
 };
 
 
-// one original contig
-// which may be split into multiple fragments
+// one original contig may be split into multiple fragments
 struct original_contig    
 {
     u32 name[16];         // contig name
@@ -128,6 +127,49 @@ struct map_state
         for (u32 i = start_pixel; i <= end_pixel; i++)
         {
             originalContigIds[i] = originalContigIds[i] % Max_Number_of_Contigs;
+        }
+    }
+
+
+    map_state(int num_pixel_1d)
+    {
+        contigIds = new u32[num_pixel_1d];
+        originalContigIds = new u32[num_pixel_1d];
+        contigRelCoords = new u32[num_pixel_1d];
+        scaffIds = new u32[num_pixel_1d];
+        metaDataFlags = new u64[num_pixel_1d];
+        memset(contigIds, 0, num_pixel_1d * sizeof(u32));
+        memset(originalContigIds, 0, num_pixel_1d * sizeof(u32));
+        memset(contigRelCoords, 0, num_pixel_1d * sizeof(u32));
+        memset(scaffIds, 0, num_pixel_1d * sizeof(u32));
+        memset(metaDataFlags, 0, num_pixel_1d * sizeof(u64));
+    }
+    ~map_state()
+    {
+        if (contigIds)
+        {
+            delete[] contigIds;
+            contigIds = nullptr;
+        }
+        if (originalContigIds)
+        {
+            delete[] originalContigIds;
+            originalContigIds = nullptr;
+        }
+        if (contigRelCoords)
+        {
+            delete[] contigRelCoords;
+            contigRelCoords = nullptr;
+        }
+        if (scaffIds)
+        {
+            delete[] scaffIds;
+            scaffIds = nullptr;
+        }
+        if (metaDataFlags)
+        {
+            delete[] metaDataFlags;
+            metaDataFlags = nullptr;
         }
     }
 };
@@ -229,6 +271,48 @@ extension_sentinel
         }
         return false;
     }
+
+    /* 
+        get the id of extension whose name including the tmp name
+        return: -1 if not found
+                id of the extension if found (return the first found id if multiple found)
+    */
+    s32 get_graph_id(const std::string name)
+    {
+        s32 id = 0;
+        TraverseLinkedList(this->head, extension_node)
+        {
+            if (node->type == extension_graph)
+            {
+                if (std::string((char*)((graph*)node->extension)->name).find(name) != std::string::npos)
+                {   
+                    fmt::println("[extension_sentinel] Found the Extension name: {}, id: {}", (char*)((graph*)node->extension)->name, id);
+                    return id;
+                }
+            }
+            id++;
+        }
+        fmt::println("[extension_sentinel] Not found the Extension name: {}", name);
+        return -1;
+    }
+
+    const u32* get_graph_data_ptr(const std::string name)
+    {
+        s32 id = get_graph_id(name);
+        if (id < 0 ) return nullptr;
+        extension_node* node = this->head;
+        while ( id-- > 0 ) 
+        {
+            if (node && node->next) node = node->next;
+            else 
+            {
+                fmt::println("[Pixel Cut::error]: The graph id is out of range");
+                assert(0);
+            }
+        }
+        return ((graph*)(node->extension))->data;
+    }
+
 };
 
 

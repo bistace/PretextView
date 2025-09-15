@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.17)
-project(PretextView VERSION "1.0.3")
+project(PretextView VERSION "1.0.4")
 
 
 option(FORCE_MAC_X86 "Force macOS x86_64 build" OFF)
@@ -7,6 +7,8 @@ option(BUILD_UNIVERSAL "Build macOS universal binary" OFF)
 option(WITH_TORCH "Find and link torch lib" OFF)
 option(DEBUG_OUTPUT_LIKELIHOOD_TABLE "Output likelihood table to file" OFF)
 option(DEBUG_OUTPUT_PIXEL_CUT_FILE "Output the pixel cut files" OFF)
+option(PYTHON_SCOPED_INTERPRETER "Use Python scoped interpreter" OFF)
+option(AI_PIC_DETECTION "Enable AI error pattern detection " OFF)
 
 set(CMAKE_C_STANDARD 17)   
 set(CMAKE_CXX_STANDARD 17)   
@@ -14,6 +16,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)  
 
 set(target_name PretextViewAI)
+
+
 
 if (APPLE)
     if(FORCE_MAC_X86) 
@@ -64,11 +68,11 @@ message(STATUS "Install path: ${CMAKE_INSTALL_PREFIX}")
 
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
-    message(STATUS "Debug version")
+    message(STATUS "Build version: Debug ")
     set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g -O0")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 else()
-    message(STATUS "Release version")
+    message(STATUS "Build version: Release ")
     set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} -O3")
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 endif()
@@ -76,11 +80,11 @@ endif()
 include_directories(
     include
     src
-    subprojects/imgui
     subprojects/glfw/include
     subprojects/libdeflate
     subprojects/glm
     subprojects/fmt/include
+    subprojects/eigen
 )
 
 add_subdirectory(subprojects/glfw)
@@ -101,6 +105,15 @@ else()
 endif()
 
 
+# test the parse_agp
+if (AGP_TEST_FLAG)
+    add_executable(parse_agp_test src/parse_agp_test.cpp)
+    target_link_libraries(parse_agp_test PRIVATE ${lib_fmt})
+    if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_definitions(parse_agp_test PRIVATE DEBUG)
+    endif()
+endif()
+
 find_library(
     lib_deflate_static 
     NAMES deflate deflatestatic
@@ -115,7 +128,7 @@ else()
     message(STATUS "lib_deflate_static found: ${lib_deflate_static}")
 endif()
 
-add_library(lib_yahs STATIC 
+add_library(yahs STATIC 
     src/yahs_sort.cpp
 )
 
@@ -134,27 +147,18 @@ if (WITH_TORCH)
         sortlib PUBLIC 
         ${TORCH_LIBRARIES} 
         ${torchscatter} 
-        lib_yahs)
+        yahs)
 else()
     message(STATUS "Libtorch: Build without libtorch")
     add_library(sortlib STATIC src/frag_sort.cpp )
-    target_link_libraries(sortlib PRIVATE lib_yahs)
+    target_link_libraries(sortlib PRIVATE yahs)
 endif()
 
 
 add_library(glad STATIC src/glad.c)
 add_library(utilsPretextView STATIC src/utilsPretextView.cpp)
 add_library(copy_texture STATIC src/copy_texture.cpp)
-# target_link_libraries(copy_texture PRIVATE Eigen3::Eigen)
-add_library(imgui STATIC 
-    subprojects/imgui/imgui_demo.cpp
-    subprojects/imgui/imgui_draw.cpp
-    subprojects/imgui/imgui_tables.cpp
-    subprojects/imgui/imgui_widgets.cpp
-    subprojects/imgui/imgui.cpp
-    subprojects/imgui/backends/imgui_impl_glfw.cpp
-    subprojects/imgui/backends/imgui_impl_opengl3.cpp
-    )
+
 
 if(NOT APPLE)
     add_executable( ${target_name} PretextView.cpp )
@@ -170,14 +174,20 @@ target_compile_definitions(${target_name} PRIVATE PV=${PROJECT_VERSION})
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
     target_compile_definitions(${target_name} PRIVATE DEBUG)
     target_compile_definitions(copy_texture PRIVATE DEBUG)
-    message(STATUS "Debug version: flag (${CMAKE_BUILD_TYPE}) with DEBUG")
-else()
-    message(STATUS "Release version: flag (${CMAKE_BUILD_TYPE}) without DEBUG")
 endif()
 if (DEBUG_OUTPUT_LIKELIHOOD_TABLE)
-    message(STATUS "Debug version: flag (${CMAKE_BUILD_TYPE}) with DEBUG_OUTPUT_LIKELIHOOD_TABLE")
+    message(STATUS "DEBUG_OUTPUT_LIKELIHOOD_TABLE: defined")
     target_compile_definitions(${target_name} PRIVATE DEBUG_OUTPUT_LIKELIHOOD_TABLE)
+else()
+    message(STATUS "DEBUG_OUTPUT_LIKELIHOOD_TABLE: not defined")
 endif()
+if (AI_PIC_DETECTION)
+    message(STATUS "AI_PIC_DETECTION: defined")
+    target_compile_definitions(${target_name} PRIVATE AI_PIC_DETECTION)
+else()
+    message(STATUS "AI_PIC_DETECTION: not defined")
+endif()
+
 
 target_link_libraries(
     ${target_name} PRIVATE 
@@ -188,10 +198,26 @@ target_link_libraries(
     glad 
     utilsPretextView 
     copy_texture 
-    imgui 
     glfw 
-    lib_yahs
+    yahs
 )   
+
+# link libraries only for debug version
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+    include_directories(
+        subprojects/imgui
+    )
+    add_library(imgui STATIC 
+        subprojects/imgui/imgui_demo.cpp
+        subprojects/imgui/imgui_draw.cpp
+        subprojects/imgui/imgui_tables.cpp
+        subprojects/imgui/imgui_widgets.cpp
+        subprojects/imgui/imgui.cpp
+        subprojects/imgui/backends/imgui_impl_glfw.cpp
+        subprojects/imgui/backends/imgui_impl_opengl3.cpp
+    )
+    target_link_libraries(${target_name} PRIVATE imgui)
+endif()
 
 if (APPLE)
     set(library_need Cocoa OpenGL IOKit CoreVideo) 
@@ -229,6 +255,50 @@ foreach (library ${library_need})
 endforeach()
 
 
+
+# ============ Kmeans for Clustering ==============
+
+if (PYTHON_SCOPED_INTERPRETER)
+    find_package(Python COMPONENTS Development Interpreter)
+else()
+    message(STATUS "PYTHON_SCOPED_INTERPRETER defined, but Python not found, build without PYTHON_SCOPED_INTERPRETER")
+endif()
+
+if (PYTHON_SCOPED_INTERPRETER AND Python_FOUND)
+    message(STATUS "PYTHON_SCOPED_INTERPRETER defined, build with PYTHON_SCOPED_INTERPRETER")
+    add_subdirectory(subprojects/pybind11)
+    # 拷贝python lib文件到编译目录下
+    get_filename_component(Python_LIBRARIES "${Python_LIBRARIES}" REALPATH)
+    get_filename_component(Python_lib_name "${Python_LIBRARIES}" NAME)
+    file(COPY ${Python_LIBRARIES} DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    message(STATUS "Python lib realpath: ${Python_LIBRARIES}, name: ${Python_lib_name}")
+    # 获取拷贝后文件的路径
+    # find_library(PYTHON_LIB_PATH 
+    #     NAMES ${Python_lib_name}  
+    #     PATHS ${CMAKE_CURRENT_BINARY_DIR} 
+    #     REQUIRED)
+    set(PYTHON_LIB_PATH "${CMAKE_CURRENT_BINARY_DIR}/${Python_lib_name}")
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND install_name_tool -id @rpath/${Python_lib_name} ${Python_LIBRARIES}
+        COMMENT "Fix install_name of python lib")    
+    message(STATUS "Build with PYTHON_SCOPED_INTERPRETER. Python search path: ${CMAKE_CURRENT_BINARY_DIR}, Python version: ${Python_VERSION}, Python_lib: ${PYTHON_LIB_PATH}")
+
+    # 将 Python 脚本复制到构建目录
+    configure_file(
+        ${CMAKE_CURRENT_SOURCE_DIR}/python/frag_cluster/kmeans_utils.py
+        ${CMAKE_CURRENT_BINARY_DIR}/kmeans_utils.py
+        COPYONLY )
+
+    # 链接 pybind11 和 Python 库
+    target_link_libraries(${target_name} PRIVATE 
+        ${PYTHON_LIB_PATH}
+        pybind11::embed 
+    )
+    message(STATUS "Using Python scoped interpreter for Kmeans")
+    target_compile_definitions(${target_name} PRIVATE PYTHON_SCOPED_INTERPRETER)
+endif()
+
+
 # ============ CMAKE INSTALLATION ==============
 file(GLOB aimodel_files "${CMAKE_CURRENT_SOURCE_DIR}/ai_model/*")
 file(GLOB torch_copy_libs "${TORCH_INSTALL_PREFIX}/lib/*")
@@ -259,21 +329,36 @@ if(APPLE)
     set_target_properties(
         ${target_name} 
         PROPERTIES 
-        INSTALL_RPATH "@executable_path/../Frameworks")
+        INSTALL_RPATH "@executable_path/../Frameworks"
+        BUILD_WITH_INSTALL_RPATH TRUE
+        MACOSX_RPATH TRUE
+        BUNDLE TRUE
+        )
     install(TARGETS ${target_name}
             BUNDLE DESTINATION .
-            COMPONENT Runtime)   # generate the ${target_name}.app package under ${cmake_install_prefix}
-    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist"
-            DESTINATION "${target_name}.app/Contents")
+            COMPONENT Runtime)  
+    # install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist"
+    #         DESTINATION "${target_name}.app/Contents")
     install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/icon.icns"
             DESTINATION "${target_name}.app/Contents/Resources" )
+    install(
+        FILES ${lib_deflate_static}
+        DESTINATION "${target_name}.app/Contents/Frameworks")
     if (WITH_TORCH)
         install(FILES ${torch_copy_libs}
                 DESTINATION "${target_name}.app/Contents/Frameworks" )
         install(FILES ${aimodel_files}
                 DESTINATION "${target_name}.app/Contents/Resources/ai_model" )
     endif()
-elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux") 
+    if (PYTHON_SCOPED_INTERPRETER)
+        install(
+            FILES ${PYTHON_LIB_PATH}
+            DESTINATION "${target_name}.app/Contents/Frameworks" )
+        install(
+            FILES ${CMAKE_CURRENT_SOURCE_DIR}/python/frag_cluster/kmeans_utils.py
+            DESTINATION "${target_name}.app/Contents/Resources" )
+    endif ()
+elseif(UNIX AND NOT APPLE) # Linux
     message(STATUS "[Cmake Install]: Linux")
     set_target_properties(
         ${target_name}
@@ -283,6 +368,9 @@ elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
         TARGETS ${target_name}
         RUNTIME DESTINATION "bin"
         COMPONENT Runtime)
+    install(
+        FILES ${lib_deflate_static}
+        DESTINATION "lib")
     if (WITH_TORCH)
         install(
             FILES ${torch_copy_libs} 
@@ -291,6 +379,14 @@ elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
             FILES ${aimodel_files} 
             DESTINATION "ai_model")
     endif()
+    if (PYTHON_SCOPED_INTERPRETER)
+        install(
+            FILES ${PYTHON_LIB_PATH}
+            DESTINATION "lib" )
+        install(
+            FILES ${CMAKE_CURRENT_SOURCE_DIR}/python/frag_cluster/kmeans_utils.py
+            DESTINATION "." )
+    endif ()
 else () # windows
     message(STATUS "[Cmake Install]: Windows")
     target_sources(${target_name} PRIVATE "${CMAKE_SOURCE_DIR}/PretextView.rc") # add logo to win version
@@ -298,6 +394,9 @@ else () # windows
         TARGETS ${target_name}
         RUNTIME DESTINATION .
         COMPONENT Runtime)
+    install(
+        FILES ${lib_deflate_static}
+        DESTINATION .)
     if (WITH_TORCH)
         install(
             FILES ${torch_copy_libs} 
@@ -306,6 +405,14 @@ else () # windows
             FILES ${aimodel_files}   
             DESTINATION "ai_model")
     endif()
+    if (PYTHON_SCOPED_INTERPRETER)
+        install(
+            FILES ${PYTHON_LIB_PATH}
+            DESTINATION . )
+        install(
+            FILES ${CMAKE_CURRENT_SOURCE_DIR}/python/frag_cluster/kmeans_utils.py
+            DESTINATION . )
+    endif ()
 endif()
 
 
@@ -314,7 +421,7 @@ include(InstallRequiredSystemLibraries)
 set(CPACK_PACKAGE_NAME ${target_name})
 set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
 set(CPACK_PACKAGE_DIRECTORY ${CMAKE_BINARY_DIR})
-set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/guanshaoheng/PretextView")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/sanger-tol/PretextView")
 set(CPACK_PACKAGE_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-${CMAKE_SYSTEM_NAME}-${ARCH_TYPE}")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENCE.txt")
 
