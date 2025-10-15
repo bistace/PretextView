@@ -344,6 +344,23 @@ if(APPLE)
     install(
         FILES ${lib_deflate_static}
         DESTINATION "${target_name}.app/Contents/Frameworks")
+    # Install libfmt dylib - get the real file path
+    get_filename_component(lib_fmt_real ${lib_fmt} REALPATH)
+    install(
+        FILES ${lib_fmt_real}
+        DESTINATION "${target_name}.app/Contents/Frameworks")
+    # Create symlink for libfmt.11.dylib during install
+    get_filename_component(lib_fmt_realname ${lib_fmt_real} NAME)
+    install(CODE "
+        execute_process(
+            COMMAND ln -sf ${lib_fmt_realname} libfmt.11.dylib
+            WORKING_DIRECTORY \${CMAKE_INSTALL_PREFIX}/${target_name}.app/Contents/Frameworks
+        )
+        execute_process(
+            COMMAND install_name_tool -id @rpath/libfmt.11.dylib ${lib_fmt_realname}
+            WORKING_DIRECTORY \${CMAKE_INSTALL_PREFIX}/${target_name}.app/Contents/Frameworks
+        )
+    ")
     if (WITH_TORCH)
         install(FILES ${torch_copy_libs}
                 DESTINATION "${target_name}.app/Contents/Frameworks" )

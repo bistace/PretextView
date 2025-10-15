@@ -1,6 +1,7 @@
 /*
 Copyright (c) 2021 Ed Harry, Wellcome Sanger Institute
 Copyright (c) 2024 Shaoheng Guan, Wellcome Sanger Institute
+Copyright (c) 2025 Yumi Sims, Wellcome Sanger Institute
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -48,6 +48,18 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 Enter scaffolding mode with the 's' key.
 - Use the GUI to see a list of scaffolds.
 
+## Extension edit mode (`X`)
+Enter extension mode with the `X` key to toggle various genomic feature overlays. Once in extension mode, press:
+- `3`: Toggle **3p_telomere** track on/off
+- `5`: Toggle **5p_telomere** track on/off
+- `T`: Toggle general **telomere** track on/off
+- `C`: Toggle **coverage** track on/off
+- `G`: Toggle **gap** track on/off
+- `R`: Toggle **repeat_density** track on/off
+- `X`: Exit extension mode
+
+**Note:** These shortcuts only work when in Extension Mode (after pressing `X`). Outside of this mode, some keys (like `T`) have different functions.
+
 ## Select sort area mode (`F`)
 
 After click `Pixel Sort` button in the main UI, it will defaultly run sort globally. If enter the the `select sort area mode`(by pressing `F`), it can sort only the selected area with pressing `Space` after selecting at least 2 contigs. 
