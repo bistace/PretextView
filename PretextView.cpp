@@ -8791,6 +8791,58 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     }
                     break;
 
+                case GLFW_KEY_3:
+                    if (Extension_Mode && Extensions.head)
+                    {
+                        TraverseLinkedList(Extensions.head, extension_node)
+                        {
+                            switch (node->type)
+                            {
+                            case extension_graph:
+                            {
+                                graph *gph = (graph *)node->extension;
+                                if (strcmp((char *)gph->name, "3p_telomere") == 0)
+                                {
+                                    gph->on = !gph->on;
+                                    break;
+                                }
+                            }
+                            }
+                        }
+                        break;
+                    }
+                    else
+                    {
+                        keyPressed = 0;
+                    }
+                    break;
+
+                case GLFW_KEY_5:
+                    if (Extension_Mode && Extensions.head)
+                    {
+                        TraverseLinkedList(Extensions.head, extension_node)
+                        {
+                            switch (node->type)
+                            {
+                            case extension_graph:
+                            {
+                                graph *gph = (graph *)node->extension;
+                                if (strcmp((char *)gph->name, "5p_telomere") == 0)
+                                {
+                                    gph->on = !gph->on;
+                                    break;
+                                }
+                            }
+                            }
+                        }
+                        break;
+                    }
+                    else
+                    {
+                        keyPressed = 0;
+                    }
+                    break;
+
                 case GLFW_KEY_U:
                     UI_On = !UI_On;
                     ++NK_Device->lastContextMemory[0];
