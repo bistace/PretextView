@@ -4203,7 +4203,15 @@ Render() {
                                 {
                                     helpTexts.push_back("R: Graph: repeat_density");
                                 }
-                                else if (strstr((char*)gph->name, "telomere"))
+                                else if (strcmp((char*)gph->name, "3p_telomere") == 0)
+                                {
+                                    helpTexts.push_back("3: Graph: 3p_telomere");
+                                }
+                                else if (strcmp((char*)gph->name, "5p_telomere") == 0)
+                                {
+                                    helpTexts.push_back("5: Graph: 5p_telomere");
+                                }
+                                else if (strcmp((char*)gph->name, "telomere") == 0)
                                 {
                                     helpTexts.push_back("T: Graph: telomere");
                                 }
