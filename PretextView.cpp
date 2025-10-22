@@ -1,6 +1,7 @@
 /*
 Copyright (c) 2021 Ed Harry, Wellcome Sanger Institute
 Copyright (c) 2024 Shaoheng Guan, Wellcome Sanger Institute
+Copyright (c) 2025 Yumi Sims, Wellcome Sanger Institute
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -972,6 +973,7 @@ struct file_browser browser;
 struct file_browser saveBrowser;
 struct file_browser loadBrowser;
 struct file_browser saveAGPBrowser;
+struct file_browser saveEditsBrowser;
 struct file_browser loadAGPBrowser;
 
 
@@ -1306,6 +1308,10 @@ global_variable
 char
 AGP_Name_Buffer[1024] = {0};
 
+global_variable
+char
+Edits_Name_Buffer[1024] = {0};
+
 global_function
 void
 SetSaveStateNameBuffer(char *name)
@@ -1314,6 +1320,7 @@ SetSaveStateNameBuffer(char *name)
     while (*name) 
     {
         AGP_Name_Buffer[ptr] = *name;
+        Edits_Name_Buffer[ptr] = *name;
         Save_State_Name_Buffer[ptr++] = *name++;
     }
     
@@ -1326,6 +1333,11 @@ SetSaveStateNameBuffer(char *name)
     name = (char *)".agp_1";
     while (*name) AGP_Name_Buffer[ptr++] = *name++;
     AGP_Name_Buffer[ptr] = 0;
+
+    ptr = ptr1;
+    name = (char *)"_edits.txt";
+    while (*name) Edits_Name_Buffer[ptr++] = *name++;
+    Edits_Name_Buffer[ptr] = 0;
 }
 
 
@@ -1334,6 +1346,7 @@ SetSaveStateNameBuffer(char *name)
     - save  0 file open
             1 save state
             2 agp state
+            3 edits save
 */
 global_function
 u08
@@ -1478,7 +1491,8 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
                         {
                             if (save)
                             {
-                                strncpy(save == 2 ? AGP_Name_Buffer : Save_State_Name_Buffer, browser->files[fileIndex], sizeof(save == 2 ? AGP_Name_Buffer : Save_State_Name_Buffer));
+                                char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : Save_State_Name_Buffer);
+                                strncpy(nameBuffer, browser->files[fileIndex], 1024);
                             }
                             else
                             {
@@ -1520,7 +1534,8 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
                 f32 fileRatio2[] = {0.45f, 0.1f, 0.18f, 0.17f, NK_UNDEFINED};
                 nk_layout_row(ctx, NK_DYNAMIC, Screen_Scale.y * 35.0f, save == 2 ? 5 : 3, save == 2 ? fileRatio2 : fileRatio);
 
-                u08 saveViaEnter = (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, save == 2 ? AGP_Name_Buffer : Save_State_Name_Buffer, sizeof(save == 2 ? AGP_Name_Buffer : Save_State_Name_Buffer), 0) & NK_EDIT_COMMITED) ? 1 : 0;
+                char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : Save_State_Name_Buffer);
+                u08 saveViaEnter = (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, nameBuffer, 1024, 0) & NK_EDIT_COMMITED) ? 1 : 0;
                 
                 static u08 overwrite = 0;
                 overwrite = (u08)nk_check_label(ctx, "Override", overwrite);
@@ -1534,7 +1549,8 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
                 {
                     strncpy(browser->file, browser->directory, MAX_PATH_LEN);
                     size_t n = strlen(browser->file);
-                    strncpy(browser->file + n, save == 2 ? AGP_Name_Buffer : Save_State_Name_Buffer, MAX_PATH_LEN - n);
+                    char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : Save_State_Name_Buffer);
+                    strncpy(browser->file + n, nameBuffer, MAX_PATH_LEN - n);
                     ret = 1 | (overwrite ? 2 : 0) | (singletons ? 4 : 0) | (preserveOrder ? 8 : 0);
                 }
 
@@ -4202,7 +4218,15 @@ Render() {
                                 {
                                     helpTexts.push_back("R: Graph: repeat_density");
                                 }
-                                else if (strstr((char*)gph->name, "telomere"))
+                                else if (strcmp((char*)gph->name, "3p_telomere") == 0)
+                                {
+                                    helpTexts.push_back("3: Graph: 3p_telomere");
+                                }
+                                else if (strcmp((char*)gph->name, "5p_telomere") == 0)
+                                {
+                                    helpTexts.push_back("5: Graph: 5p_telomere");
+                                }
+                                else if (strcmp((char*)gph->name, "telomere") == 0)
                                 {
                                     helpTexts.push_back("T: Graph: telomere");
                                 }
@@ -8791,6 +8815,58 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     }
                     break;
 
+                case GLFW_KEY_3:
+                    if (Extension_Mode && Extensions.head)
+                    {
+                        TraverseLinkedList(Extensions.head, extension_node)
+                        {
+                            switch (node->type)
+                            {
+                            case extension_graph:
+                            {
+                                graph *gph = (graph *)node->extension;
+                                if (strcmp((char *)gph->name, "3p_telomere") == 0)
+                                {
+                                    gph->on = !gph->on;
+                                    break;
+                                }
+                            }
+                            }
+                        }
+                        break;
+                    }
+                    else
+                    {
+                        keyPressed = 0;
+                    }
+                    break;
+
+                case GLFW_KEY_5:
+                    if (Extension_Mode && Extensions.head)
+                    {
+                        TraverseLinkedList(Extensions.head, extension_node)
+                        {
+                            switch (node->type)
+                            {
+                            case extension_graph:
+                            {
+                                graph *gph = (graph *)node->extension;
+                                if (strcmp((char *)gph->name, "5p_telomere") == 0)
+                                {
+                                    gph->on = !gph->on;
+                                    break;
+                                }
+                            }
+                            }
+                        }
+                        break;
+                    }
+                    else
+                    {
+                        keyPressed = 0;
+                    }
+                    break;
+
                 case GLFW_KEY_U:
                     UI_On = !UI_On;
                     ++NK_Device->lastContextMemory[0];
@@ -11016,7 +11092,7 @@ UserSaveState(const char *headerHash, u08 overwrite , char *path)
     // finished (shaoheng) save default file browser directory
     const char* placeholder = "fdpc"; // placeholder for File Directory Path Cache 
     for (int i = 0; i < 4; i ++ ) fwrite(&placeholder[i], sizeof(char), 1, file);
-    for (const file_browser& browser_tmp : { browser, saveBrowser, loadBrowser, saveAGPBrowser, loadAGPBrowser }) {
+    for (const file_browser& browser_tmp : { browser, saveBrowser, loadBrowser, saveAGPBrowser, saveEditsBrowser, loadAGPBrowser }) {
         if (browser_tmp.directory[0]!='\0') {
             u32 dir_len = strlen(browser_tmp.directory);
             fwrite(&dir_len, sizeof(dir_len), 1, file);
@@ -11180,7 +11256,7 @@ global_function
     // file directory path cache
     char lable[4];
     if (fread(lable, sizeof(char), 4, file) == 4 && strncmp(lable, "fdpc", 4) == 0) {   
-        std::vector<file_browser*> browsers = { &browser, &saveBrowser, &loadBrowser, &saveAGPBrowser, &loadAGPBrowser };
+        std::vector<file_browser*> browsers = { &browser, &saveBrowser, &loadBrowser, &saveAGPBrowser, &saveEditsBrowser, &loadAGPBrowser };
         for (file_browser* browser_ptr : browsers) {
             u32 dir_len;
             if (fread(&dir_len, sizeof(dir_len), 1, file) == 1 && dir_len > 0) {
@@ -11273,6 +11349,71 @@ CopyEditsToClipBoard(GLFWwindow *window)
         glfwSetClipboardString(window, (const char *)buffer);
         
         FreeLastPush(Working_Set); // buffer
+    }
+}
+
+global_function
+void
+SaveEditsToFile(char *path, u08 overwrite)
+{
+    u32 nEdits = my_Min(Edits_Stack_Size, Map_Editor->nEdits);
+
+    if (nEdits)
+    {
+        FILE *file;
+        if (!overwrite && (file = fopen((const char *)path, "rb")))
+        {
+            fclose(file);
+            return;
+        }
+
+        if ((file = fopen((const char *)path, "w")))
+        {
+            u32 bufferSize = 256 * nEdits;
+            u08 *buffer = PushArray(Working_Set, u08, bufferSize);
+            u32 bufferPtr = 0;
+
+            u32 editStackPtr = Map_Editor->editStackPtr == nEdits ? 0 : Map_Editor->editStackPtr;
+
+            f64 bpPerPixel = (f64)Total_Genome_Length / (f64)(Number_of_Textures_1D * Texture_Resolution);
+
+            // Write header
+            bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), 
+                "# Edit History\n# Generated by %s\n# Total Edits: %u\n\n", PretextView_Version, nEdits);
+            fwrite(buffer, 1, bufferPtr, file);
+            bufferPtr = 0;
+
+            ForLoop(nEdits)
+            {
+                if (editStackPtr == nEdits)
+                {
+                    editStackPtr = 0;
+                }
+
+                map_edit *edit = Map_Editor->edits + editStackPtr++;
+
+                u32 start = my_Min(edit->finalPix1, edit->finalPix2);
+                u32 end = my_Max(edit->finalPix1, edit->finalPix2);
+                u32 to = start ? start - 1 : (end < (Number_of_Pixels_1D - 1) ? end + 1 : end);
+
+                u32 oldFrom = Map_State->contigRelCoords[start];
+                u32 oldTo = Map_State->contigRelCoords[end];
+                u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
+                u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
+                u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
+
+                bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n\n",
+                        index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
+                        edit->finalPix1 > edit->finalPix2 ? (const char *)"       inverted and moved to" : (const char *)"       moved to",
+                        (char *)newName, (f64)Map_State->contigRelCoords[to] * bpPerPixel);
+            }
+
+            buffer[bufferPtr] = 0;
+            fwrite(buffer, 1, bufferPtr, file);
+            
+            fclose(file);
+            FreeLastPush(Working_Set); // buffer
+        }
     }
 }
 
@@ -11660,6 +11801,7 @@ MainArgs
         FileBrowserInit(&saveBrowser, &media);
         FileBrowserInit(&loadBrowser, &media);
         FileBrowserInit(&saveAGPBrowser, &media);
+        FileBrowserInit(&saveEditsBrowser, &media);
         FileBrowserInit(&loadAGPBrowser, &media);
     }
     
@@ -11781,6 +11923,7 @@ MainArgs
             s32 showSaveStateScreen = 0;
             s32 showLoadStateScreen = 0;
             s32 showSaveAGPScreen = 0;
+            s32 showSaveEditsScreen = 0;
             s32 showLoadAGPScreen = 0;
             s32 showMetaDataTagEditor = 0;
             s32 showUserProfileScreen = 0;
@@ -12648,7 +12791,7 @@ MainArgs
 
                                 nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
                                 if (nEdits && nk_button_label(NK_Context, "Undo")) UndoMapEdit();
-                                if (nEdits && nk_button_label(NK_Context, "Copy to Clipboard")) CopyEditsToClipBoard(window);
+                                if (nEdits) showSaveEditsScreen = nk_button_label(NK_Context, "Save Edits");
 
                                 nk_tree_pop(NK_Context);
                             }
@@ -12965,6 +13108,18 @@ MainArgs
                     {
                         FenceIn(GenerateAGP(saveAGPBrowser.file, state & 2, state & 4, state & 8));
                         FileBrowserReloadDirectoryContent(&saveAGPBrowser, saveAGPBrowser.directory);
+                    }
+
+                    if ((state = FileBrowserRun("Save Edits", &saveEditsBrowser, NK_Context, (u32)showSaveEditsScreen, 3))) 
+                    {
+                        FenceIn(SaveEditsToFile(saveEditsBrowser.file, state & 2));
+                        FileBrowserReloadDirectoryContent(&saveEditsBrowser, saveEditsBrowser.directory);
+                        
+                        // Close the dialog after saving
+                        struct nk_window *saveEditsWindow = nk_window_find(NK_Context, "Save Edits");
+                        if (saveEditsWindow) {
+                            saveEditsWindow->flags |= NK_WINDOW_HIDDEN;
+                        }
                     }
 
                     if (showClearCacheScreen)
