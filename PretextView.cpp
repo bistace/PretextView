@@ -5657,10 +5657,21 @@ push_extensions_to_opengl(memory_arena *arena, u32 added_index = 0, f32 scale=-1
 #define DefaultGraphBase 32.0f
 #define DefaultGraphLineSize 1.0f
 #define DefaultGraphColour {0.1f, 0.8f, 0.7f, 1.0f}
+#define Colour_5p_telomere {0.533f, 0.800f, 0.933f, 1.0f}  // #88CCEE - light blue
+#define Colour_3p_telomere {0.867f, 0.800f, 0.467f, 1.0f}  // #DDCC77 - light gold
                     gph->scale = scale>0.f? scale : DefaultGraphScale;
                     gph->base = DefaultGraphBase;
                     gph->lineSize = DefaultGraphLineSize;
-                    gph->colour = DefaultGraphColour;
+                    
+                    // Set color based on extension name
+                    if (strcmp((char*)gph->name, "5p_telomere") == 0) {
+                        gph->colour = Colour_5p_telomere;
+                    } else if (strcmp((char*)gph->name, "3p_telomere") == 0) {
+                        gph->colour = Colour_3p_telomere;
+                    } else {
+                        gph->colour = DefaultGraphColour;
+                    }
+                    
                     gph->on = 0;
 
                     gph->shader = PushStructP(arena, editable_plot_shader);
@@ -12749,6 +12760,13 @@ MainArgs
                             
                             if (nk_tree_push(NK_Context, NK_TREE_TAB, (char *)buff, NK_MINIMIZED))
                             {
+                                // Buttons at the top
+                                nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
+                                if (nEdits && nk_button_label(NK_Context, "Undo")) UndoMapEdit();
+                                if (nEdits) showSaveEditsScreen = nk_button_label(NK_Context, "Save Edits");
+
+                                nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
+                                
                                 u32 editStackPtr = Map_Editor->editStackPtr == nEdits ? 0 : Map_Editor->editStackPtr;
 
                                 f64 bpPerPixel = (f64)Total_Genome_Length / (f64)(Number_of_Textures_1D * Texture_Resolution);
@@ -12788,10 +12806,6 @@ MainArgs
 
                                     ++editStackPtr;
                                 }
-
-                                nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
-                                if (nEdits && nk_button_label(NK_Context, "Undo")) UndoMapEdit();
-                                if (nEdits) showSaveEditsScreen = nk_button_label(NK_Context, "Save Edits");
 
                                 nk_tree_pop(NK_Context);
                             }
