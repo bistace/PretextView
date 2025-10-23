@@ -239,7 +239,7 @@ bool check_source_sink_attachable(
     if ((source_chain_id == ca && sink_chain_id == cb) || 
         (sink_chain_id == ca && source_chain_id == cb)) return 0;
 
-    source_frag_id--; sink_frag_id -- ; // 在link中，从0开始编号，但是source_frag_id从1开始编号
+    source_frag_id--; sink_frag_id -- ; // In the link set, id starts from 0, but source_frag_id starts from 1.
 
     // source and sink can not be linked to each other
     if ((lnk.frag_a == source_frag_id && lnk.frag_b==sink_frag_id)||
@@ -801,7 +801,7 @@ void FragSortTool::sort_according_likelihood_unionFind_doFuse(
                 std::copy(cha.begin()+i+1, cha.end(), std::back_inserter(atail));
             std::deque<s32> bhead(chb.begin(), chb.begin()+j+1);
 
-            // todo （3, Apr. 2025） 检查为什么在deep fuse的时候还是会弄乱
+            // todo （3, Apr. 2025） Investigate why the data still gets corrupted during the deep fusion process.
             std::deque<s32> fused = fuse_chromosomes(
                 all_links, 
                 map_links, 

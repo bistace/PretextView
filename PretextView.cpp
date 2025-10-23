@@ -5624,6 +5624,15 @@ add_graph_to_extensions(
     {
         gph->data[i] = *(graph_data + i);
     }
+    
+    // Initialize extension fields
+    gph->on = 0;
+    gph->nameOn = 1;  // Show name by default
+    gph->activecolor = 0;
+    gph->scale = 0.0f;  // Will be set by push_extensions_to_opengl
+    gph->base = 0.0f;
+    gph->lineSize = 0.0f;
+    
     node->type = extension_graph;      // assign the gph to node
     node->extension = gph;
     AddExtension(node);     // add node to extension
@@ -5663,7 +5672,7 @@ push_extensions_to_opengl(memory_arena *arena, u32 added_index = 0, f32 scale=-1
                     gph->base = DefaultGraphBase;
                     gph->lineSize = DefaultGraphLineSize;
                     
-                    // Set color based on extension name
+                    // Set color and label based on extension name
                     if (strcmp((char*)gph->name, "5p_telomere") == 0) {
                         gph->colour = Colour_5p_telomere;
                     } else if (strcmp((char*)gph->name, "3p_telomere") == 0) {
@@ -5671,6 +5680,10 @@ push_extensions_to_opengl(memory_arena *arena, u32 added_index = 0, f32 scale=-1
                     } else {
                         gph->colour = DefaultGraphColour;
                     }
+                    
+                    // Show labels for all extensions by default
+                    gph->nameOn = 1;
+                    gph->activecolor = 0;
                     
                     gph->on = 0;
 
@@ -6150,6 +6163,14 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                                             {
                                                 gph->name[index2] = *(namePtr + index2);
                                             }
+
+                                            // Initialize extension fields
+                                            gph->on = 0;
+                                            gph->nameOn = 1;  // Show name by default
+                                            gph->activecolor = 0;
+                                            gph->scale = 0.0f;  // Will be set by push_extensions_to_opengl
+                                            gph->base = 0.0f;
+                                            gph->lineSize = 0.0f;
 
                                             node->type = type;      // assign the gph to node
                                             node->extension = gph;
@@ -8556,7 +8577,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
             }*/
 
 
-            else if (key == GLFW_KEY_U)
+            else if (key == GLFW_KEY_ESCAPE)
             {
                 Deferred_Close_UI = 1;
             }
@@ -8878,7 +8899,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     }
                     break;
 
-                case GLFW_KEY_U:
+                case GLFW_KEY_ESCAPE:
                     UI_On = !UI_On;
                     ++NK_Device->lastContextMemory[0];
                     Mouse_Move.x = Mouse_Move.y = -1;
@@ -10823,8 +10844,9 @@ restore_initial_state()
             {
                 case extension_graph:
                     {
-                        ((graph *)node->extension)->on = 0;
-                        ((graph *)node->extension)->nameOn = 0;
+                        graph *gph = (graph *)node->extension;
+                        gph->on = 0;
+                        gph->nameOn = 1;  // Show all extension labels by default
                     }
                     break;
             }
