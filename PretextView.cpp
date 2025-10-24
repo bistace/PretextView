@@ -311,6 +311,25 @@ global_variable
     nk_colorf
         DefaultGraphColour = graphColors[activeGraphColour];
 
+// Extension name constants
+global_variable const char *
+    EXT_NAME_3P_TELOMERE = "3p_telomere";
+
+global_variable const char *
+    EXT_NAME_5P_TELOMERE = "5p_telomere";
+
+global_variable const char *
+    EXT_NAME_TELOMERE = "telomere";
+
+global_variable const char *
+    EXT_NAME_COVERAGE = "coverage";
+
+global_variable const char *
+    EXT_NAME_GAP = "gap";
+
+global_variable const char *
+    EXT_NAME_REPEAT_DENSITY = "repeat_density";
+
 
 global_variable
 nk_context *
@@ -4206,27 +4225,27 @@ Render() {
                             {
                                 graph *gph = (graph *)node->extension;
 
-                                if (strstr((char*)gph->name, "coverage"))
+                                if (strstr((char*)gph->name, EXT_NAME_COVERAGE))
                                 {
                                     helpTexts.push_back("C: Graph: coverage");
                                 }
-                                else if (strstr((char*)gph->name, "gap"))
+                                else if (strstr((char*)gph->name, EXT_NAME_GAP))
                                 {
                                     helpTexts.push_back("G: Graph: gap");
                                 }
-                                else if (strstr((char*)gph->name, "repeat_density"))
+                                else if (strstr((char*)gph->name, EXT_NAME_REPEAT_DENSITY))
                                 {
                                     helpTexts.push_back("R: Graph: repeat_density");
                                 }
-                                else if (strcmp((char*)gph->name, "3p_telomere") == 0)
+                                else if (strcmp((char*)gph->name, EXT_NAME_3P_TELOMERE) == 0)
                                 {
                                     helpTexts.push_back("3: Graph: 3p_telomere");
                                 }
-                                else if (strcmp((char*)gph->name, "5p_telomere") == 0)
+                                else if (strcmp((char*)gph->name, EXT_NAME_5P_TELOMERE) == 0)
                                 {
                                     helpTexts.push_back("5: Graph: 5p_telomere");
                                 }
-                                else if (strcmp((char*)gph->name, "telomere") == 0)
+                                else if (strcmp((char*)gph->name, EXT_NAME_TELOMERE) == 0)
                                 {
                                     helpTexts.push_back("T: Graph: telomere");
                                 }
@@ -5624,6 +5643,15 @@ add_graph_to_extensions(
     {
         gph->data[i] = *(graph_data + i);
     }
+    
+    // Initialize extension fields
+    gph->on = 0;
+    gph->nameOn = 1;  // Show name by default
+    gph->activecolor = 0;
+    gph->scale = 0.0f;  // Will be set by push_extensions_to_opengl
+    gph->base = 0.0f;
+    gph->lineSize = 0.0f;
+    
     node->type = extension_graph;      // assign the gph to node
     node->extension = gph;
     AddExtension(node);     // add node to extension
@@ -5657,10 +5685,25 @@ push_extensions_to_opengl(memory_arena *arena, u32 added_index = 0, f32 scale=-1
 #define DefaultGraphBase 32.0f
 #define DefaultGraphLineSize 1.0f
 #define DefaultGraphColour {0.1f, 0.8f, 0.7f, 1.0f}
+#define Colour_5p_telomere {0.533f, 0.800f, 0.933f, 1.0f}  // #88CCEE - light blue
+#define Colour_3p_telomere {0.867f, 0.800f, 0.467f, 1.0f}  // #DDCC77 - light gold
                     gph->scale = scale>0.f? scale : DefaultGraphScale;
                     gph->base = DefaultGraphBase;
                     gph->lineSize = DefaultGraphLineSize;
-                    gph->colour = DefaultGraphColour;
+                    
+                    // Set color and label based on extension name
+                    if (strcmp((char*)gph->name, EXT_NAME_5P_TELOMERE) == 0) {
+                        gph->colour = Colour_5p_telomere;
+                    } else if (strcmp((char*)gph->name, EXT_NAME_3P_TELOMERE) == 0) {
+                        gph->colour = Colour_3p_telomere;
+                    } else {
+                        gph->colour = DefaultGraphColour;
+                    }
+                    
+                    // Show labels for all extensions by default
+                    gph->nameOn = 1;
+                    gph->activecolor = 0;
+                    
                     gph->on = 0;
 
                     gph->shader = PushStructP(arena, editable_plot_shader);
@@ -6139,6 +6182,14 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                                             {
                                                 gph->name[index2] = *(namePtr + index2);
                                             }
+
+                                            // Initialize extension fields
+                                            gph->on = 0;
+                                            gph->nameOn = 1;  // Show name by default
+                                            gph->activecolor = 0;
+                                            gph->scale = 0.0f;  // Will be set by push_extensions_to_opengl
+                                            gph->base = 0.0f;
+                                            gph->lineSize = 0.0f;
 
                                             node->type = type;      // assign the gph to node
                                             node->extension = gph;
@@ -7484,7 +7535,7 @@ void run_ai_detection()
 
 void cut_frags(const std::vector<int>& problem_locs, bool consider_gap_extension_flag=true, bool consider_min_len_flag=true)
 {   
-    const u32* gap_data_ptr = (auto_curation_state.auto_cut_with_extension && consider_gap_extension_flag) ? Extensions.get_graph_data_ptr("gap"):nullptr; 
+    const u32* gap_data_ptr = (auto_curation_state.auto_cut_with_extension && consider_gap_extension_flag) ? Extensions.get_graph_data_ptr(EXT_NAME_GAP):nullptr; 
 
     for (auto & loc_orig : problem_locs)
     {   
@@ -8545,7 +8596,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
             }*/
 
 
-            else if (key == GLFW_KEY_U)
+            else if (key == GLFW_KEY_ESCAPE)
             {
                 Deferred_Close_UI = 1;
             }
@@ -8630,7 +8681,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             {
 
                                 graph *gph = (graph *)node->extension;
-                                if (strcmp((char *)gph->name, "coverage") == 0)
+                                if (strcmp((char *)gph->name, EXT_NAME_COVERAGE) == 0)
                                 {
                                     gph->on = !gph->on;
                                     break;
@@ -8669,8 +8720,8 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                         case extension_graph:
                         {
 
-                            graph *gph = (graph *)node->extension;
-                            if (strcmp((char *)gph->name, "gap") == 0)
+                                graph *gph = (graph *)node->extension;
+                                if (strcmp((char *)gph->name, EXT_NAME_GAP) == 0)
                             {
                                 gph->on = !gph->on;
                                 break;
@@ -8753,7 +8804,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             case extension_graph:
                             {
                                 graph *gph = (graph *)node->extension;
-                                if (strcmp((char *)gph->name, "repeat_density") == 0)
+                                if (strcmp((char *)gph->name, EXT_NAME_REPEAT_DENSITY) == 0)
                                 {
                                     gph->on = !gph->on;
                                     break;
@@ -8799,7 +8850,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             {
 
                                 graph *gph = (graph *)node->extension;
-                                if (strcmp((char *)gph->name, "telomere") == 0)
+                                if (strcmp((char *)gph->name, EXT_NAME_TELOMERE) == 0)
                                 {
                                     gph->on = !gph->on;
                                     break;
@@ -8825,7 +8876,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             case extension_graph:
                             {
                                 graph *gph = (graph *)node->extension;
-                                if (strcmp((char *)gph->name, "3p_telomere") == 0)
+                                if (strcmp((char *)gph->name, EXT_NAME_3P_TELOMERE) == 0)
                                 {
                                     gph->on = !gph->on;
                                     break;
@@ -8851,7 +8902,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             case extension_graph:
                             {
                                 graph *gph = (graph *)node->extension;
-                                if (strcmp((char *)gph->name, "5p_telomere") == 0)
+                                if (strcmp((char *)gph->name, EXT_NAME_5P_TELOMERE) == 0)
                                 {
                                     gph->on = !gph->on;
                                     break;
@@ -8867,7 +8918,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     }
                     break;
 
-                case GLFW_KEY_U:
+                case GLFW_KEY_ESCAPE:
                     UI_On = !UI_On;
                     ++NK_Device->lastContextMemory[0];
                     Mouse_Move.x = Mouse_Move.y = -1;
@@ -10812,8 +10863,9 @@ restore_initial_state()
             {
                 case extension_graph:
                     {
-                        ((graph *)node->extension)->on = 0;
-                        ((graph *)node->extension)->nameOn = 0;
+                        graph *gph = (graph *)node->extension;
+                        gph->on = 0;
+                        gph->nameOn = 1;  // Show all extension labels by default
                     }
                     break;
             }
@@ -12749,6 +12801,13 @@ MainArgs
                             
                             if (nk_tree_push(NK_Context, NK_TREE_TAB, (char *)buff, NK_MINIMIZED))
                             {
+                                // Buttons at the top
+                                nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
+                                if (nEdits && nk_button_label(NK_Context, "Undo")) UndoMapEdit();
+                                if (nEdits) showSaveEditsScreen = nk_button_label(NK_Context, "Save Edits");
+
+                                nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
+                                
                                 u32 editStackPtr = Map_Editor->editStackPtr == nEdits ? 0 : Map_Editor->editStackPtr;
 
                                 f64 bpPerPixel = (f64)Total_Genome_Length / (f64)(Number_of_Textures_1D * Texture_Resolution);
@@ -12788,10 +12847,6 @@ MainArgs
 
                                     ++editStackPtr;
                                 }
-
-                                nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
-                                if (nEdits && nk_button_label(NK_Context, "Undo")) UndoMapEdit();
-                                if (nEdits) showSaveEditsScreen = nk_button_label(NK_Context, "Save Edits");
 
                                 nk_tree_pop(NK_Context);
                             }

@@ -8,7 +8,7 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 
 ## Home screen
 
-- `U` or `middle mouse button`: enter main GUI.
+- `Esc` or `middle mouse button`: enter main GUI.
 - `right mouse button`: holding down and move to drag the Hi-C figure move within the window. 
 - `Mouse scroll` to zoom. A three button mouse is recomended.
 - `E`: enter the Edit mode.
@@ -24,7 +24,7 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 - `Up` / `Down`: change the color map.
 - `Left` / `Right`: decrease / increase the Gamma mid (default: 0.5).
 
-## Main GUI (`U`)
+## Main GUI (`Esc`)
 <img src="doc/image_mainGUI.png" alt="" width="600">
 
 - `Load Map`: select `.pretext` file to load the HiC figure.

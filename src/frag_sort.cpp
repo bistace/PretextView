@@ -217,13 +217,10 @@ void initilise_chromosomes(
 }
 
 /*
-条件：
-1. source frag 的头不能连
-2. sink frag   的尾不能连
-3. source 和 sink不能连到一起
-
-
-
+Conditions:
+1.The head of a source fragment cannot be connected.
+2.The tail of a sink fragment cannot be connected.
+3.A source and a sink cannot be connected to each other.
     return: 
             0: not attachable, 
             1: attachable
@@ -242,7 +239,7 @@ bool check_source_sink_attachable(
     if ((source_chain_id == ca && sink_chain_id == cb) || 
         (sink_chain_id == ca && source_chain_id == cb)) return 0;
 
-    source_frag_id--; sink_frag_id -- ; // 在link中，从0开始编号，但是source_frag_id从1开始编号
+    source_frag_id--; sink_frag_id -- ; // In the link set, id starts from 0, but source_frag_id starts from 1.
 
     // source and sink can not be linked to each other
     if ((lnk.frag_a == source_frag_id && lnk.frag_b==sink_frag_id)||
@@ -467,8 +464,14 @@ void FragSortTool::sort_according_likelihood_unionFind(
         {false, true}, {false, false}};
     for (u32 i = 0; i < n; i++) 
     {
+        // Skip excluded fragments
+        if (likelihood_table.excluded_fragment_idx.count(i) != 0) continue;
+        
         for (u32 j = i+1; j < n; j++)
         {
+            // Skip excluded fragments
+            if (likelihood_table.excluded_fragment_idx.count(j) != 0) continue;
+            
             for (u32 k = 0; k < 4; k++)
             {   
                 f32 val = likelihood_table(i, j, k);
@@ -692,8 +695,14 @@ void FragSortTool::sort_according_likelihood_unionFind_doFuse(
         {false, true}, {false, false}};
     for (u32 i = 0; i < n; i++) 
     {
+        // Skip excluded fragments
+        if (likelihood_table.excluded_fragment_idx.count(i) != 0) continue;
+        
         for (u32 j = i+1; j < n; j++)
         {
+            // Skip excluded fragments
+            if (likelihood_table.excluded_fragment_idx.count(j) != 0) continue;
+            
             for (u32 k = 0; k < 4; k++)
             {   
                 f32 val = likelihood_table(i, j, k);
@@ -792,7 +801,7 @@ void FragSortTool::sort_according_likelihood_unionFind_doFuse(
                 std::copy(cha.begin()+i+1, cha.end(), std::back_inserter(atail));
             std::deque<s32> bhead(chb.begin(), chb.begin()+j+1);
 
-            // todo （3, Apr. 2025） 检查为什么在deep fuse的时候还是会弄乱
+            // todo （3, Apr. 2025） Investigate why the data still gets corrupted during the deep fusion process.
             std::deque<s32> fused = fuse_chromosomes(
                 all_links, 
                 map_links, 
