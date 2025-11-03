@@ -6,10 +6,13 @@ from sklearn.metrics import silhouette_score
 import numpy as np 
 
 """
-    genome片段聚类分析:
-    1. 读取基因组片段数据
-    2. 计算拉普拉斯矩阵
-    3. 谱聚类
+    Genome Fragment Clustering Analysis:
+
+    Read genome fragment data
+
+    Compute Laplacian matrix
+
+    Spectral clustering
 
 """
 

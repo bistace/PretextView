@@ -21,6 +21,8 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 - `L`: toggle the Grid Line.
 - `T`: toggle the Tooltip.
 - `I`: toggle the ID bar.
+- `3`: toggle the 3p_telomere extension.
+- `5`: toggle the 5p_telomere extension.
 - `Up` / `Down`: change the color map.
 - `Left` / `Right`: decrease / increase the Gamma mid (default: 0.5).
 
@@ -50,15 +52,15 @@ Enter scaffolding mode with the 's' key.
 
 ## Extension edit mode (`X`)
 Enter extension mode with the `X` key to toggle various genomic feature overlays. Once in extension mode, press:
-- `3`: Toggle **3p_telomere** track on/off
-- `5`: Toggle **5p_telomere** track on/off
+- `3`: Toggle **3p_telomere** track on/off (also works at top level)
+- `5`: Toggle **5p_telomere** track on/off (also works at top level)
 - `T`: Toggle general **telomere** track on/off
 - `C`: Toggle **coverage** track on/off
 - `G`: Toggle **gap** track on/off
 - `R`: Toggle **repeat_density** track on/off
 - `X`: Exit extension mode
 
-**Note:** These shortcuts only work when in Extension Mode (after pressing `X`). Outside of this mode, some keys (like `T`) have different functions.
+**Note:** The `3` and `5` keys work both inside and outside Extension Mode. Other shortcuts (C, G, R, T) only work when in Extension Mode, as these keys have different functions outside of it.
 
 ## Select sort area mode (`F`)
 
