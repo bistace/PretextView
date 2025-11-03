@@ -1454,14 +1454,13 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
         {   
             /* define a string here for filtering */
             std::string searchbuf_str="";
-            if (!save){ // only need this while loading something
-                nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 25.0f, 3);
-                nk_label(NK_Context, "Search: ", NK_TEXT_LEFT);
-                nk_edit_string_zero_terminated(NK_Context, NK_EDIT_FIELD, searchbuf, sizeof(searchbuf) - 1, nk_filter_default);
-                caseSensitive_search_sequences = nk_check_label(NK_Context, "Case Sensitive", caseSensitive_search_sequences) ? 1 : 0;
-                searchbuf_str = std::string(searchbuf);
-                if (!caseSensitive_search_sequences) std::transform(searchbuf_str.begin(), searchbuf_str.end(), searchbuf_str.begin(), ::tolower);
-            }
+            // Show search box for all file browser dialogs (load and save)
+            nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 25.0f, 3);
+            nk_label(NK_Context, "Search: ", NK_TEXT_LEFT);
+            nk_edit_string_zero_terminated(NK_Context, NK_EDIT_FIELD, searchbuf, sizeof(searchbuf) - 1, nk_filter_default);
+            caseSensitive_search_sequences = nk_check_label(NK_Context, "Case Sensitive", caseSensitive_search_sequences) ? 1 : 0;
+            searchbuf_str = std::string(searchbuf);
+            if (!caseSensitive_search_sequences) std::transform(searchbuf_str.begin(), searchbuf_str.end(), searchbuf_str.begin(), ::tolower);
             
             s32 index = -1;
             size_t i = 0, j = 0;//, k = 0;
@@ -5790,7 +5789,7 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 {
     u64 fileSize = 0;
 
-    FILE *file = TestFile(filePath, &fileSize); //  检查前4个字节读取到的数据， 如果为 u08 Magic[] = {'p', 's', 't', 'm'} 则通过验证，否则将指针file设置为空指针
+    FILE *file = TestFile(filePath, &fileSize); //  Check the data read from the first 4 bytes. If it matches u08 Magic[] = {'p', 's', 't', 'm'}, the verification passes; otherwise, set the pointer file to a null pointer.
     if (!file)    // 如果为空指针， 返回读取错误fileErr
     {
         return(fileErr);
@@ -8867,7 +8866,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_3:
-                    if (Extension_Mode && Extensions.head)
+                    if (Extensions.head)
                     {
                         TraverseLinkedList(Extensions.head, extension_node)
                         {
@@ -8884,7 +8883,6 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             }
                             }
                         }
-                        break;
                     }
                     else
                     {
@@ -8893,7 +8891,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_5:
-                    if (Extension_Mode && Extensions.head)
+                    if (Extensions.head)
                     {
                         TraverseLinkedList(Extensions.head, extension_node)
                         {
@@ -8910,7 +8908,6 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                             }
                             }
                         }
-                        break;
                     }
                     else
                     {
