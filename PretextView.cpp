@@ -1,4 +1,5 @@
 /*
+Copyright (c) 2024,2025 Genome Research Ltd.
 Copyright (c) 2021 Ed Harry, Wellcome Sanger Institute
 Copyright (c) 2024 Shaoheng Guan, Wellcome Sanger Institute
 Copyright (c) 2025 Yumi Sims, Wellcome Sanger Institute
@@ -20,6 +21,10 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+@author: Ed Harry, Wellcome Sanger Institute
+@author: Shaoheng Guan, Wellcome Sanger Institute
+@author: Yumi Sims, yy5@sanger.ac.uk, Wellcome Sanger Institute
 */
 
 

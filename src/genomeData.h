@@ -28,8 +28,8 @@ SOFTWARE.
 #include "utilsPretextView.h"
 #include "showWindowData.h"
 
-// NOTE: if the number exceed this value, the contig  counted as  N % 16384, for example, contig 16384 will be counted as 0, 16385 1, 16386 as 2
-#define Max_Number_of_Contigs 16384 // 16384 // originally 4096 
+// NOTE: if the number exceed this value, the contig  counted as  N % 32768, for example, contig 32768 will be counted as 0, 32769 1, 32770 as 2
+#define Max_Number_of_Contigs 32768 // 32768 // originally 4096 
 
 struct
 file_atlas_entry
@@ -41,15 +41,15 @@ file_atlas_entry
 
 struct contact_matrix
 {
-    GLuint textures;       // 存储一个或多个OpenGL纹理对象的句柄
+    GLuint textures;       // Store one or more OpenGL texture IDs (GLuint)
     GLuint pixelStartLookupBuffer;
     GLuint pixelRearrangmentLookupBuffer; // save the pixel rearrangement lookup buffer
     GLuint pixelStartLookupBufferTex;
     GLuint pixelRearrangmentLookupBufferTex;
     GLint pad;
-    GLuint *vaos = nullptr;          // 指向顶点数组对象数组
-    GLuint *vbos = nullptr;          // 指向顶点缓冲区对象数组
-    GLuint shaderProgram;  // 着色器编号
+    GLuint *vaos = nullptr;          // Pointer to VAO array
+    GLuint *vbos = nullptr;          // A pointer to an array of VBOs
+    GLuint shaderProgram;  // Shader ID
     GLint matLocation;
 };
 
@@ -59,7 +59,7 @@ struct original_contig
 {
     u32 name[16];         // contig name
     u32 *contigMapPixels = nullptr; // global center coordinate of the fragments
-    u32 nContigs;         // num of contigs, 原contig被分成了多少个fragments
+    u32 nContigs;         // num of contigs, original contig is split into many fragments
     u32 pad;
 };
 
