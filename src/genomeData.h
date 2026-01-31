@@ -28,8 +28,9 @@ SOFTWARE.
 #include "utilsPretextView.h"
 #include "showWindowData.h"
 
-// NOTE: if the number exceed this value, the contig  counted as  N % 32768, for example, contig 32768 will be counted as 0, 32769 1, 32770 as 2
-#define Max_Number_of_Contigs 65536 // 32768 // originally 4096 
+// NOTE: if the number exceed this value, the contig  counted as  N % 32768, for
+// example, contig 32768 will be counted as 0, 32769 1, 32770 as 2
+#define Max_Number_of_Contigs 65536 // 32768 // originally 4096
 
 struct
 file_atlas_entry
@@ -176,7 +177,7 @@ struct map_state
 
 
 /*
-用于存储计算得到的pixel_density值
+Used to store the calculated pixel_density value
 */
 struct Extension_Graph_Data
 {   
