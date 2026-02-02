@@ -5979,53 +5979,74 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 
         *fileName = tmp + 1;
 
+        // Transfer the characters to the intbuff array.
         u32 intBuff[16];
-        PushStringIntoIntArray(intBuff, ArrayCount(intBuff), (u08 *)(*fileName)); // 将字符穿转移到intbuff数组中
+        PushStringIntoIntArray(intBuff, ArrayCount(intBuff), (u08 *)(*fileName));
 
         /*
-        这段代码假设文件中的数据是以 4 字节整数的形式存储的，并且依次存储了 
-        nBytesHeaderComp 和 nBytesHeader 两个值。通常情况下，
-        这种操作用于读取文件中存储的数据头部信息或者其他固定格式的数据。
+        This code assumes the data in the file is stored as 4-byte integers,
+        with the values nBytesHeaderComp and nBytesHeader stored
+        sequentially. Typically, this operation is used to read the header
+        information or other fixed-format data stored in a file.
         */
-        u32 nBytesHeaderComp; // 压缩后数据大小
-        u32 nBytesHeader;     // 解压后数据大小
-        fread(&nBytesHeaderComp, 1, 4, file);  // 从文件中读取 4 个字节的数据，并将其存储在 nBytesHeaderComp 变量中 
+        u32 nBytesHeaderComp; // Compressed data size
+        u32 nBytesHeader;     // Data size after decompression
+        // Read 4 bytes of data from the file and store them in the variable nBytesHeaderComp.
+        fread(&nBytesHeaderComp, 1, 4, file);
         fread(&nBytesHeader, 1, 4, file);
 
-        u08 *header = PushArrayP(arena, u08, nBytesHeader);                // 从内存池中分配u08 数组，大小为 nBytesHeader
-        u08 *compressionBuffer = PushArrayP(arena, u08, nBytesHeaderComp); // 从内存池中分配u08 数组，大小为 nBytesHeaderComp
+        // Allocate an array u08 from the memory pool, with a size of nBytesHeader.
+        u08 *header = PushArrayP(arena, u08, nBytesHeader);
 
-        fread(compressionBuffer, 1, nBytesHeaderComp, file);  // nBytesHeaderComp个字节的压缩数据，存储到compressionBuffer
-        *headerHash = FastHash64( // head的地址采用fasthash加密，作为存储文件的文件名。 compressionBuffer所指向的值进行hash得到一个名字，作为存储文件的文件名
+        // Allocate an array u08 from the memory pool, with a size of nBytesHeaderComp.
+        u08 *compressionBuffer = PushArrayP(arena, u08, nBytesHeaderComp);
+
+        // Store nBytesHeaderComp bytes of compressed data in compressionBuffer.
+        fread(compressionBuffer, 1, nBytesHeaderComp, file);
+
+        // The address of `head` is encrypted using fasthash and used as the
+        // filename for the stored file.  The value pointed to by
+        // `compressionBuffer` is hashed to obtain a name, which is also used
+        // as the filename for the stored file.
+        *headerHash = FastHash64(
             compressionBuffer, 
             nBytesHeaderComp,  
             FastHash64(intBuff, sizeof(intBuff), 0xbafd06832de619c2)
             );
         // fprintf(stdout, "The headerHash is calculated accordig to the compressed head, the hash number is (%llu) and the cache file name is (%s)\n", *headerHash, (u08*) headerHash);
-        if (
-            libdeflate_deflate_decompress(
-            Decompressor,                     // 指向 解压缩器 
-            (const void *)compressionBuffer,  // 指向 即将解压的数据，(const void *)强制转换为不可修改的内存块
-            nBytesHeaderComp,                 // 解压缩的字节数
-            (void *)header,                   // 指向 解压缩后存储的位置，转换为通用内存块
-            nBytesHeader,                     // 解压后预计大小
-            NULL)                             // 表示不传递其他参数给压缩函数
-        )
-        {
-            return(decompErr); // decompress err
+        if (libdeflate_deflate_decompress(
+                Decompressor,                    // Pointer to decompressor.
+                (const void *)compressionBuffer, // Pointer to the data to be
+                                                 // decompressed; (const void *)
+                                                 // is forcibly cast to an
+                                                 // immutable memory block.
+                nBytesHeaderComp, // Number of bytes to be decompressed.
+                (void *)header,   // Pointer to the location where the
+                                  // decompressed data will be stored, converted
+                                  // into a general-purpose memory block.
+                nBytesHeader,     // Expected size after decompression.
+                NULL) // Optional pointer for writing the size of the
+                      // decompressed data to (not given).
+        ) {
+          return (decompErr); // decompress err
         }
-        FreeLastPushP(arena); // comp buffer  释放内存池（arena）中最近一次通过 PushArrayP 宏分配的内存空间
-                              // 遍历内存池链表，找到最后一个内存池，并释放其最近一次分配的内存空间。防止内存泄漏
+
+        // The `comp buffer` function releases the memory space most recently
+        // allocated via the `PushArrayP` macro in the memory pool(arena). It
+        // iterates through the memory pool list, finds the last memory pool,
+        // and releases its most recently allocated memory space. This
+        // prevents memory leaks.
+        FreeLastPushP(arena);
 
         /*
-        header的格式
+        header format
         ==========================
         nBytes           Contents
         --------------------------
         8             Total_Genome_Length
         4             Number_of_Original_Contigs
         -------------------
-            Number_of_Original_Contigs 个 contigs 的存储规则 
+            Storage rules for Number_of_Original_Contigs
         -------------------
             4      contig fracs
             64       name
@@ -6037,10 +6058,10 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         */
 
         u64 val64;
-        u08 *ptr = (u08 *)&val64;  // 获取val64存储的 八位无符号整型（u08）的指针
+        u08 *ptr = (u08 *)&val64;  // Get a pointer to the 8-bit unsigned integer (u08) stored in val64.
         ForLoop(8)
         {
-            *ptr++ = *header++;    // 指针赋值给到val64的大小 -> 整个基因的长度
+            *ptr++ = *header++;    // The pointer is assigned the size of val64 -> the length of the entire genome.
         }
         Total_Genome_Length = val64;
 
@@ -6050,72 +6071,91 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         {
             *ptr++ = *header++;
         }
-        Number_of_Original_Contigs = val32;   // 指针赋值给到val32的值 -> contigs的数目
+        Number_of_Original_Contigs = val32;  // The pointer is assigned to the value of val32 -> the number of contigs.
 
-        // 从内存池中分配存储原始 contig 的数组内存，类型为 original_contig，数组长度为 Number_of_Original_Contigs
+        // Allocate an array of memory from the memory pool to store the
+        // original contigs. The array type is `original_contig`, and the
+        // array length is `Number_of_Original_Contigs`.
         Original_Contigs = PushArrayP(arena, original_contig, Number_of_Original_Contigs);
-        // 分配一个存储浮点数的数组
+        // Allocate an array to store floating-point numbers.
         // f32 *contigFracs = PushArrayP(arena, f32, Number_of_Original_Contigs);
         f32 *contigFracs = new f32[Number_of_Original_Contigs];
-        ForLoop(Number_of_Original_Contigs) // 读取 contigs fraction (f32) and name
+        ForLoop(Number_of_Original_Contigs)  // Read contigs fraction (f32) and name
         {
 
             f32 frac;
             u32 name[16];
 
-            // 读取每个contig 对应的一个f32
+            // Read an f32 corresponding to each contig
             ptr = (u08 *)&frac;
-            ForLoop2(4)           // 从header中读取4个字节的数据存储到frac中 
+            ForLoop2(4)  // Read 4 bytes of data from the header and store them in frac.
             {
                 *ptr++ = *header++;
             }
-            contigFracs[index] = frac; // 将这个f32 存储到 contigFracs[index] 中
+            contigFracs[index] = frac;  // Store this f32 in contigFracs[index].
             
-            // 读取contig的名字
+            // Read the name of the contig
             ptr = (u08 *)name;
             ForLoop2(64)
             {
                 *ptr++ = *header++;
             }
-            // contig name赋值
+            // Contig name assignment
             ForLoop2(16)
             {
-                Original_Contigs[index].name[index2] = name[index2];   // 将 u32 name[16] 给到每一个contig  的name
+                Original_Contigs[index].name[index2] = name[index2];  // Assign u32 name[16] to the name of each contig.
             }
             
-            (Original_Contigs + index)->contigMapPixels = PushArrayP(arena, u32, Number_of_Pixels_1D); // 为每个contig 的 mapPixels 变量 申请内存
-            (Original_Contigs + index)->nContigs = 0; 
+            // Allocate memory for the mapPixels variable for each contig.
+            (Original_Contigs + index)->contigMapPixels = PushArrayP(arena, u32, Number_of_Pixels_1D);
+            (Original_Contigs + index)->nContigs = 0;
         }
 
-        u08 textureRes = *header++;  // 分辨率
-        u08 nTextRes = *header++;    // 纹理数目
+        u08 textureRes = *header++;  // Resolution
+        u08 nTextRes = *header++;    // Number of textures
         u08 mipMapLevels = *header;  // ？？
 
-        Texture_Resolution = Pow2(textureRes);   // 纹理分辨率 当前显示的像素点个数，1024 
-        Number_of_Textures_1D = Pow2(nTextRes);  // 一维纹理数目 可以放大的次数，每一个像素点可以放大32次，
+        // Texture resolution: The number of pixels currently displayed, 1024.
+        Texture_Resolution = Pow2(textureRes);
+
+        // The number of times a one-dimensional texture can be magnified; each pixel can be magnified 32 times.
+        Number_of_Textures_1D = Pow2(nTextRes);
+
         Number_of_MipMaps = mipMapLevels;
 
-        Number_of_Pixels_1D = Number_of_Textures_1D * Texture_Resolution; // 更新一维数据的长度
+        // Update the length of one-dimensional data
+        Number_of_Pixels_1D = Number_of_Textures_1D * Texture_Resolution;
 
         // update the pixel_cut consider range if high resolution
         if (Number_of_Pixels_1D > 32768) auto_curation_state.auto_cut_diag_window_for_pixel_mean = 16;
 
-        Map_State = PushStructP(arena, map_state);                                   // 从内存池中分配一个包含 map_state 结构的内存块，并返回指向该结构的指针， 存储contigs map到图像中的数据
-        Map_State->contigIds = PushArrayP(arena, u32, Number_of_Pixels_1D);          // 从内存池中分配存储 contigIds 的数组，数组长度为 Number_of_Pixels_1D
+        // Allocate a memory block containing a `map_state` structure from the
+        // memory pool and return a pointer to that structure to store the
+        // data that contigs map into the image.
+        Map_State = PushStructP(arena, map_state);
+
+        // Allocate an array from the memory pool to store contigIds, with an array length of Number_of_Pixels_1D.
+        Map_State->contigIds = PushArrayP(arena, u32, Number_of_Pixels_1D);
+
         Map_State->originalContigIds = PushArrayP(arena, u32, Number_of_Pixels_1D);  // 
-        Map_State->contigRelCoords = PushArrayP(arena, u32, Number_of_Pixels_1D);    // 像素坐标
+        Map_State->contigRelCoords = PushArrayP(arena, u32, Number_of_Pixels_1D);    // Pixel coordinates
         Map_State->scaffIds = PushArrayP(arena, u32, Number_of_Pixels_1D);           // scaffID
-        Map_State->metaDataFlags = PushArrayP(arena, u64, Number_of_Pixels_1D);      // 标记
-        memset(Map_State->scaffIds, 0, Number_of_Pixels_1D * sizeof(u32));           // 将scaffID和metaDataFlags初始化为0
+        Map_State->metaDataFlags = PushArrayP(arena, u64, Number_of_Pixels_1D);      // Markup
+        memset(Map_State->scaffIds, 0, Number_of_Pixels_1D * sizeof(u32));           // Initialize scaffID and metaDataFlags to 0.
         memset(Map_State->metaDataFlags, 0, Number_of_Pixels_1D * sizeof(u64));
-        f32 total = 0.0f; // 所有contig的一个浮点数的累积, finally should approximately be 1.0
+        f32 total = 0.0f; // The sum of all contigs, each containing a floating-point number, should finally be approximately 1.0.
         u32 lastPixel = 0;
         u32 relCoord = 0; 
 
-        ForLoop(Number_of_Original_Contigs)  // 初始设定每个contig的每个像素点的id和局部坐标
+        // Initially, set the ID and local coordinates of each pixel in each contig.
+        ForLoop(Number_of_Original_Contigs)
         {
-            total += contigFracs[index]; // 当前所有contig对应的浮点数的累积，包括当前contig
-            u32 pixel = (u32)((f64)Number_of_Pixels_1D * (f64)total);  // 每行像素点数 * 当前占比
+            // The cumulative floating-point numbers corresponding to all
+            // current contigs, including the current contig.
+            total += contigFracs[index];
+
+            // Number of pixels per row * Current percentage
+            u32 pixel = (u32)((f64)Number_of_Pixels_1D * (f64)total);
             
             relCoord = 0;
 #ifdef RevCoords
@@ -6123,8 +6163,11 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 #endif
             while (lastPixel < pixel)
             {
-                Map_State->originalContigIds[lastPixel] = index; // 每一个像素点对应的都是当前contig的编号
-                Map_State->contigRelCoords[lastPixel++] =        // 每一个像素点对应的在当前contig中的局部坐标
+                // Each pixel that corresponds to the current contig number.
+                Map_State->originalContigIds[lastPixel] = index;
+
+                // The local coordinates of each pixel in the current contig
+                Map_State->contigRelCoords[lastPixel++] =
 #ifdef RevCoords
                     tmp - relCoord++;
 #else
@@ -6133,35 +6176,58 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
             }
         }
         delete[] contigFracs;
-        while (lastPixel < Number_of_Pixels_1D)  // 处理数值计算导致的lastPixel小于Number_of_Pixels_1D的问题
+
+        // Addressing the issue of lastPixel being less than
+        // Number_of_Pixels_1D due to numerical calculations.
+        while (lastPixel < Number_of_Pixels_1D)
         {
-            Map_State->originalContigIds[lastPixel] = (u32)(Number_of_Original_Contigs - 1); //假设其为最后一个contig的像素点
+            // Assumes the lastPixel belongs to the last contig
+            Map_State->originalContigIds[lastPixel] = (u32)(Number_of_Original_Contigs - 1);
             Map_State->contigRelCoords[lastPixel++] = relCoord++;   
         }
 
-        Contigs = PushStructP(arena, contigs);              // 声明一个存储contigs的内存块， 其返回Contigs作为这个块的指针，实际上此处为整个genome的信息
-        Contigs->contigs_arr = PushArrayP(arena, contig, Max_Number_of_Contigs); // 每一个Contigs中会有contigs (片段)，一共有Max_Number_of_Contigs多个片段，最多存放4096个contigs
-        Contigs->contigInvertFlags = PushArrayP(arena, u08, (Max_Number_of_Contigs + 7) >> 3);  // (4096 + 7 ) >> 3 = 512, 声明512个u08的存储空间
+        // Declare a memory block to store contigs, which returns contigs as
+        // pointers to this block; in fact, this contains information about
+        // the entire genome.
+        Contigs = PushStructP(arena, contigs);
 
-        UpdateContigsFromMapState();  //  根据mapstate 跟新当前的contigs, 并且更新original_contigs里面的每个contig所包含的片段的个数和片段的中点
+        // Each contig contains contigs (fragments), and there are a maximum
+        // of Max_Number_of_Contigs fragments, storing a maximum of 4096
+        // contigs.
+        Contigs->contigs_arr = PushArrayP(arena, contig, Max_Number_of_Contigs);
 
-        u32 nBytesPerText = 0;   //  程序将一整张图分成了32*32个小格子，每一个格子被称作texture
+        // (4096 + 7) >> 3 = 512, declares storage space for 512 u08s.
+        Contigs->contigInvertFlags = PushArrayP(arena, u08, (Max_Number_of_Contigs + 7) >> 3);
+
+        // Update the current contigs based on mapstate, and update the number
+        // of fragments contained in each contig in original_contigs and the
+        // midpoint of the fragments.
+        UpdateContigsFromMapState();
+
+        // The program divides the entire image into 32x32 small grids, each
+        // of which is called a texture.
+        u32 nBytesPerText = 0;
         ForLoop(Number_of_MipMaps)
         {
             nBytesPerText += Pow2((2 * textureRes--));  // sum([2**(2*i) for i in range(10, 10-Number_of_MipMaps, -1)])/2
         }
-        nBytesPerText >>= 1; // 除以 2 因为数据是经过压缩的 
-        Bytes_Per_Texture = nBytesPerText;  // 一个texture 对应的字节数目 
+        nBytesPerText >>= 1; // Divide by 2 because the data is compressed.
+        Bytes_Per_Texture = nBytesPerText;  // Number of bytes corresponding to a texture
 
         File_Atlas = PushArrayP(arena, file_atlas_entry, (Number_of_Textures_1D + 1) * (Number_of_Textures_1D >> 1));   // variable to store the data entry 
 
-        u32 currLocation = sizeof(Magic) + 8 + nBytesHeaderComp;     // current localtion of the pointer = magic_check + (u32 compressed head length) +  (u32 decompressed head length) + compressed header length  
+        // current localtion of the pointer =
+        //     magic_check
+        //     + (u32 compressed head length)
+        //     + (u32 decompressed head length)
+        //     + compressed header length
+        u32 currLocation = sizeof(Magic) + 8 + nBytesHeaderComp;
         
         // locating the pointers to data of entries
         ForLoop((Number_of_Textures_1D + 1) * (Number_of_Textures_1D >> 1)) // loop through total number of the textures
         {
             /*
-            数据结构：
+            Data Structures:
                 - magic (4 bytes)
                 - 8 bytes
                 - headercomp (nBytesHeaderComp bytes)
@@ -6170,25 +6236,44 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                     - data
 
             */
-            file_atlas_entry *entry = File_Atlas + index; // get the temprory pointer of the entry
-            u32 nBytes;      // define a u32 to save the data 
-            fread(&nBytes, 1, 4, file);    // 读取四个字节, 前四个字节存储一个u32表示大小，后面的数据存储
-            fseek(file, nBytes, SEEK_CUR); // 文件指针会向前移动 nBytes 个字节，SEEK_CUR在c标准库中被定义为1, after the loop, pointer file is moved to the end of the reading file 
-            currLocation += 4;             // 每移动一次，currLocation 增加 4 
 
-            entry->base = currLocation;    // asign the current location to File_Atlas + index  
-            entry->nBytes = nBytes;        // asign the size to File_Atlas + index
+            // get the temprory pointer of the entry
+            file_atlas_entry *entry = File_Atlas + index;
+
+            // define a u32 to save the data
+            u32 nBytes;
+
+            // Read four bytes. The first four bytes store a u32 representation
+            // of the size, and the remaining bytes store the data.
+            fread(&nBytes, 1, 4, file);
+
+            // The file pointer will move forward n bytes, and SEEK_CUR is
+            // defined as 1 in the C standard library. After the loop, pointer
+            // file is moved to the end of the reading file .
+            fseek(file, nBytes, SEEK_CUR);
+
+            // Each time you move, currLocation increases by 4.
+            currLocation += 4;
+
+            // Assign the current location to File_Atlas + index
+            entry->base = currLocation;
+
+            // Assign the size to File_Atlas + index
+            entry->nBytes = nBytes;
 
             currLocation += nBytes;
         }
 
         // Extensions
         {
-            u08 magicTest[sizeof(Extension_Magic_Bytes[0])];  // define a u08 array, to check the end of the file, use this to read the extensions 
+            // Define a u08 array, to check the end of the file, use this to
+            // read the extensions.
+            u08 magicTest[sizeof(Extension_Magic_Bytes[0])];
 
             while ((u64)(currLocation + sizeof(magicTest)) < fileSize)
             {
-                u32 bytesRead = (u32)fread(magicTest, 1, sizeof(magicTest), file); // reading 4 bytes from the file
+                // reading 4 bytes from the file
+                u32 bytesRead = (u32)fread(magicTest, 1, sizeof(magicTest), file);
                 currLocation += bytesRead;
                 if (bytesRead == sizeof(magicTest))
                 {
@@ -6198,7 +6283,10 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                         u08 *magic = (u08 *)Extension_Magic_Bytes[index];
                         ForLoop2(sizeof(magicTest))
                         {
-                            if (magic[index2] != magicTest[index2]) // magicTest is from the file, magic is from the definition // if magic this isn't the same, means no extensions found
+                            // magicTest is from the file, magic is from the
+                            // definition.  If magic this isn't the same, means
+                            // no extensions found.
+                            if (magic[index2] != magicTest[index2])
                             {
                                 foundExtension = 0;
                                 break;
@@ -6217,43 +6305,39 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                                         fread(&compSize, 1, sizeof(u32), file);   // get the size of the extension data
                                         graph *gph = PushStructP(arena, graph);   // create the size to store the extension data
                                         extension_node *node = PushStructP(arena, extension_node);
-                                        u08 *dataPlusName = PushArrayP(arena, u08, ((sizeof(u32) * Number_of_Pixels_1D) + sizeof(gph->name) )); // there are 1024 * 32 u32 numbers. Every single one of them represents the data on a pixel.
+
+                                        // there are 1024 * 32 u32 numbers.  Every single one of them represents the data on a pixel.
+                                        u08 *dataPlusName = PushArrayP(arena, u08, ((sizeof(u32) * Number_of_Pixels_1D) + sizeof(gph->name) ));
 #pragma clang diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-align"
-                                        gph->data = (u32 *)(dataPlusName + sizeof(gph->name));  // the first 16 u32 are the name of the extention, which can include 16*32/8=64 u08 (char).
+                                        // the first 16 u32 are the name of the extention, which can include 16*32/8=64 u08 (char).
+                                        gph->data = (u32 *)(dataPlusName + sizeof(gph->name));
 #pragma clang diagnostic pop                                       
                                         extensionSize += (compSize + sizeof(u32));
                                         u08 *compBuffer = PushArrayP(arena, u08, compSize);
                                         fread(compBuffer, 1, compSize, file);    // read the extension data from the file pointer
-                                        if (libdeflate_deflate_decompress(Decompressor, (const void *)compBuffer, compSize, (void *)dataPlusName, (sizeof(u32) * Number_of_Pixels_1D) + sizeof(gph->name), NULL))   // decompress compBuffer to dataPlusName 
-                                        /* code from the libdeflate.h
-                                        enum libdeflate_result {
-                                            // Decompression was successful.  
-                                            LIBDEFLATE_SUCCESS = 0,
-
-                                            // Decompression failed because the compressed data was invalid,
-                                            * corrupt, or otherwise unsupported.  
-                                            LIBDEFLATE_BAD_DATA = 1,
-
-                                            // A NULL 'actual_out_nbytes_ret' was provided, but the data would have
-                                            * decompressed to fewer than 'out_nbytes_avail' bytes.  
-                                            LIBDEFLATE_SHORT_OUTPUT = 2,
-
-                                            // The data would have decompressed to more than 'out_nbytes_avail'
-                                            * bytes.  
-                                            LIBDEFLATE_INSUFFICIENT_SPACE = 3,
-                                        };
-                                        */
-                                        {   // unsuccessful decompress
+                                        // Decompress compBuffer to dataPlusName
+                                        if (libdeflate_deflate_decompress(
+                                                Decompressor,
+                                                (const void *)compBuffer,
+                                                compSize, (void *)dataPlusName,
+                                                (sizeof(u32) *
+                                                 Number_of_Pixels_1D) +
+                                                    sizeof(gph->name),
+                                                NULL))
+                                        {
+                                            // Unsuccessful decompression
                                             FreeLastPushP(arena); // data
                                             FreeLastPushP(arena); // graph
                                             FreeLastPushP(arena); // node
-                                        }
-                                        else
-                                        {   // successful decompress
+                                        } else {
+                                            // Successful decompression
 #pragma clang diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-align"
-                                            u32 *namePtr = (u32 *)dataPlusName;  // get a temp pointer，将原来的u08指针切换为u32指针，所指向的位置相同，只是不同的解释方式
+                                            // get a temp pointer，Switching from the original u08 pointer
+                                            // to the u32 pointer will point to the same location, but the
+                                            // interpretation will be different.
+                                            u32 *namePtr = (u32 *)dataPlusName;
 #pragma clang diagnostic pop
                                             ForLoop2(ArrayCount(gph->name))  // get the graph name
                                             {
