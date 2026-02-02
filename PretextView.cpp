@@ -6069,14 +6069,15 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         ptr = (u08 *)&val32;
         ForLoop(4)
         {
-            *ptr++ = *header++;
+            *ptr++ = *header++;  // The pointer is assigned to the value of val32 -> the number of contigs.
         }
-        Number_of_Original_Contigs = val32;  // The pointer is assigned to the value of val32 -> the number of contigs.
+        Number_of_Original_Contigs = val32;
 
         // Allocate an array of memory from the memory pool to store the
-        // original contigs. The array type is `original_contig`, and the
-        // array length is `Number_of_Original_Contigs`.
+        // original contigs.  The holds structs of type `original_contig`,
+        // and the array length is `Number_of_Original_Contigs`.
         Original_Contigs = PushArrayP(arena, original_contig, Number_of_Original_Contigs);
+
         // Allocate an array to store floating-point numbers.
         // f32 *contigFracs = PushArrayP(arena, f32, Number_of_Original_Contigs);
         f32 *contigFracs = new f32[Number_of_Original_Contigs];
@@ -6100,6 +6101,7 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
             {
                 *ptr++ = *header++;
             }
+
             // Contig name assignment
             ForLoop2(16)
             {
@@ -6113,7 +6115,7 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 
         u08 textureRes = *header++;  // Resolution
         u08 nTextRes = *header++;    // Number of textures
-        u08 mipMapLevels = *header;  // ？？
+        u08 mipMapLevels = *header;  // Number of mipmap levels  (https://en.wikipedia.org/wiki/Mipmap)
 
         // Texture resolution: The number of pixels currently displayed, 1024.
         Texture_Resolution = Pow2(textureRes);
