@@ -796,8 +796,11 @@ global_function
 u08
 IsContigInverted(u32 index)
 {
-    return(Contigs->contigInvertFlags[index >> 3] & (1 << (index & 7)));  // 所以这个32位的数：后三位表示1所在的位数，其他的表示编号
-    // return(Contigs->contigInvertFlags[index / 8] & (1 << (index % 8)));  // check if contig is inverted  
+    // Therefore, in this 32-bit number: the last three bits represent the
+    // position of 1, and the others represent the serial number.
+    return(Contigs->contigInvertFlags[index >> 3] & (1 << (index & 7)));
+    // return(Contigs->contigInvertFlags[index / 8] & (1 << (index % 8)));
+    // check if contig is inverted
 }
 
 global_function
@@ -1738,30 +1741,45 @@ resources, click each entry to view its licence.)text";
 
 global_function
 void
-UpdateContigsFromMapState()  //  reading 从map的状态更新contigs
+UpdateContigsFromMapState()  // Reading updates contigs from the state of the map.
 {
-    u32 lastScaffID = Map_State->scaffIds[0];       // 第一个scaff的编号
+    u32 lastScaffID = Map_State->scaffIds[0];       // The number of the first scaffold
     u32 scaffId = lastScaffID ? 1 : 0;              // 
-    u32 lastId_original_contig = Map_State->originalContigIds[0];   // 第一个像素点对应的id
-    u32 lastCoord = Map_State->contigRelCoords[0];  // 第一个像素点的局部坐标
+    u32 lastId_original_contig = Map_State->originalContigIds[0];   // Contig ID of the first pixel
+    u32 lastCoord = Map_State->contigRelCoords[0];  // Local coordinates of the first pixel
     u32 contigPtr = 0;
     u32 length = 0;
     u32 startCoord = lastCoord;
-    u08 inverted = Map_State->contigRelCoords[1] < lastCoord;  // 判断是不是反转的
+    u08 inverted = Map_State->contigRelCoords[1] < lastCoord;  // Determine if it is reversed
     Map_State->contigIds[0] = 0;
     
     u32 pixelIdx = 0;
-    ForLoop(Number_of_Original_Contigs) (Original_Contigs + index)->nContigs = 0; // 将每一个contig的 片段数目 置为零
-    ForLoop(Number_of_Pixels_1D - 1)    // 遍历每一个像素点 更新 Original_Contigs， Contigs 
-    // 遍历完之后，contigPtr为214，但是Number_of_Original_Contigs = 218 
+
+    // Set the number of fragments for each contig to zero.
+    ForLoop(Number_of_Original_Contigs) (Original_Contigs + index)->nContigs = 0;
+
+    // Iterate through each pixel and update `Original_Contigs`.
+    // (After iterating through all contigs, `contigPtr` is 214, but
+    // `Number_of_Original_Contigs` is 218.)
+    ForLoop(Number_of_Pixels_1D - 1)
     {
-        if (contigPtr >= Max_Number_of_Contigs) break;  // 确保 contigPtr 不超出最大contig的数值
+        // Ensure that contigPtr does not exceed the value of the maximum
+        // number of contigs.
+        if (contigPtr >= Max_Number_of_Contigs) break;
 
         ++length; // current fragment length
 
-        pixelIdx = index + 1;   // 像素点编号， 加一因为第一个已经用来初始化了
-        u32 original_contig_id = Map_State->originalContigIds[pixelIdx];  // 像素点的 original contig id, 这里 不使用 % Max_Number_of_Contigs的值是为了区分后面cut之后的片段
-        u32 coord = Map_State->contigRelCoords[pixelIdx]; // 像素点的局部坐标
+        // The pixel number is incremented by one because the first one has
+        // already been initialised.
+        pixelIdx = index + 1;
+
+        // The original contig ID of the pixel. The value of %
+        // Max_Number_of_Contigs is not used here to distinguish the segments
+        // after the cut.
+        u32 original_contig_id = Map_State->originalContigIds[pixelIdx];
+
+        // Local coordinates of a pixel
+        u32 coord = Map_State->contigRelCoords[pixelIdx];
         
         if (
             original_contig_id != lastId_original_contig || 
@@ -1769,44 +1787,99 @@ UpdateContigsFromMapState()  //  reading 从map的状态更新contigs
             (!inverted && coord != (lastCoord + 1)) 
         ) // not a continuous fragment
         {   
-            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].contigMapPixels[Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs] = pixelIdx - 1 - (length >> 1);   // update Original_Contigs: contigMapPixels
-            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs++; // update Original_Contigs: nContigs, contigMapPixels
+            // update Original_Contigs: contigMapPixels
+            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].contigMapPixels[
+                Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs
+            ] = pixelIdx - 1 - (length >> 1);
 
-            contig *last_cont = Contigs->contigs_arr + contigPtr; // 获取上一个contig的指针， 并且给contigPtr + 1
-            contigPtr++;
-            last_cont->originalContigId = lastId_original_contig; // 更新这个片段的id
-            last_cont->length = length;           // 更新长度
-            last_cont->startCoord = startCoord;   // 更新开头为当前片段在该contig上的局部坐标 endCoord = startCoord + length - 1
-            last_cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1; // Finished (shaoheng): memory problem: assign the pointer to the cont->metaDataFlags, the original is nullptr, the let this ptr point to the last pixel of the contig
+            // update Original_Contigs: nContigs, contigMapPixels
+            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs++;
 
-            u32 thisScaffID = Map_State->scaffIds[pixelIdx - 1]; // 上一个像素点对应的 scaffid
-            last_cont->scaffId = thisScaffID ? ((thisScaffID == lastScaffID) ? (scaffId) : (++scaffId)) : 0;  // 如果存在scaffid则（判断是不是同一个scaff，如果是则继续用scaffid，否则++scaffid），否则为0  
-            lastScaffID = thisScaffID; // 更新
+            // Get the pointer to the previous contig
+            contig *last_cont = Contigs->contigs_arr + contigPtr;
+
+            // Update the ID of this clip.
+            last_cont->originalContigId = lastId_original_contig;
+
+            // Update length
+            last_cont->length = length;
+
+            // Update the beginning of the string to the local coordinates of
+            // the current segment within the contig:
+            //    endCoord = startCoord + length - 1
+            last_cont->startCoord = startCoord;
+
+            // Finished (shaoheng): memory problem: assign the pointer to the
+            // cont->metaDataFlags, the original is nullptr, the let this ptr
+            // point to the last pixel of the contig
+            last_cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1;
+
+            // The scaffID corresponding to the previous pixel.
+            u32 thisScaffID = Map_State->scaffIds[pixelIdx - 1];
+
+            // If a scaffID exists, then:
+            //   if it is the same scaffold:
+            //       continue using the scaffID
+            //   else:
+            //       increment the scaffID
+            // otherwise:
+            //   set it to 0.
+            last_cont->scaffId =
+                thisScaffID
+                    ? ((thisScaffID == lastScaffID) ? (scaffId) : (++scaffId))
+                    : 0;
+
+            // Save the scaffold ID
+            lastScaffID = thisScaffID;
 
 
-            // 余数表示8数的第几位，如果未反向则对应位为0，若反向则对应位为1
-            if (IsContigInverted(contigPtr - 1)) // 判断上一个contig是否反向
-            {   // 位操作更新contigflag
-                // 每8个片段的正反采用一个u08表示，每一个bit表示一个正反，余数表示这八个中的第几个，如果没有反向则对应位为0
-                if (!inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] &= ~(1 << ((contigPtr - 1) & 7));  
+            // The remainder indicates the digit position of the 8-digit
+            // number. If the remainder is not reversed, the corresponding
+            // digit is 0; if the remainder is reversed, the corresponding
+            // digit is 1.
+
+            // Determine if the previous contig is reversed.
+            if (IsContigInverted(contigPtr))
+            {
+                // Bitwise operation to update the contig flags.
+                // ---------------------------------------------
+                // Each set of 8 segments is represented by a u08 symbol,
+                // where each bit represents a positive or negative segment,
+                // and the remainder indicates which segment in the set of 8.
+                // If there is no positive or negative segment, the
+                // corresponding bit is 0.
+                if (!inverted) Contigs->contigInvertFlags[contigPtr >> 3] &= ~(1 << (contigPtr & 7));
             }
             else
-            {   // 如果反向则额对应位的bit为1
-                if (inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] |= (1 << ((contigPtr - 1) & 7));  // 如果反向
+            {
+                // If reversed, the corresponding bit will be 1.
+                if (inverted) Contigs->contigInvertFlags[contigPtr >> 3] |= (1 << (contigPtr & 7));
             }
 
-            startCoord = coord; // 当前片段开始的坐标
-            length = 0;         // 当前片段长度清零0
-            if (pixelIdx < (Number_of_Pixels_1D - 1)) inverted = Map_State->contigRelCoords[pixelIdx + 1] < coord;  // 更新inverted
+            // Increment contigPtr by 1.
+            contigPtr++;
+
+            startCoord = coord; // Coordinates of the start of the current segment
+            length = 0;         // Current segment length reset to 0
+            // Update inverted
+            if (pixelIdx < (Number_of_Pixels_1D - 1))
+                inverted = Map_State->contigRelCoords[pixelIdx + 1] < coord;
         }
-        // 更新上一个id和局部坐标
-        Map_State->contigIds[pixelIdx] = (u32)contigPtr; // 像素点对应的 片段id 修改为当前的统计得到片段id
-        lastId_original_contig = original_contig_id;     // 更新上一个像素点的id
-        lastCoord = coord; // 更新上一个像素点的局部坐标
+        // Update the previous ID and local coordinates.
+
+        // Modify the fragment ID corresponding to the pixel to the fragment
+        // ID obtained from the current statistics.
+        Map_State->contigIds[pixelIdx] = (u32)contigPtr;
+
+        // Update the ID of the previous pixel.
+        lastId_original_contig = original_contig_id;
+
+        // Update the local coordinates of the previous pixel
+        lastCoord = coord;
     }
 
-    if (contigPtr < Max_Number_of_Contigs) //  contigptr 小于 Number_of_Original_Contigs
-    // 更新最后一个contig的最后一个片段信息
+    if (contigPtr < Max_Number_of_Contigs)
+    // Update the fragment information of the last contig.
     {
         (Original_Contigs + lastId_original_contig % Max_Number_of_Contigs)->contigMapPixels[(Original_Contigs + lastId_original_contig % Max_Number_of_Contigs)->nContigs++] = pixelIdx - 1 - (length >> 1); 
 
@@ -7471,7 +7544,7 @@ BreakMap(
 
     fmt::print(
         "[Pixel Cut] Original contig_id ({}), current_id ({}), pixel range: [{}, {}] {} inversed, cut at {}\n", 
-        original_contig_id%Max_Number_of_Contigs, 
+        original_contig_id % Max_Number_of_Contigs,
         contig_id, 
         ptr_left, 
         ptr_right, 

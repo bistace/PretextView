@@ -28,7 +28,7 @@ SOFTWARE.
 #include "utilsPretextView.h"
 #include "showWindowData.h"
 
-// NOTE: if the number exceed this value, the contig  counted as  N % 32768, for
+// NOTE: if the number exceed this value, the contig counted as N % 32768, for
 // example, contig 32768 will be counted as 0, 32769 1, 32770 as 2
 #define Max_Number_of_Contigs 65536 // 32768 // originally 4096
 
