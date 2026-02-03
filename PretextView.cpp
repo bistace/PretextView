@@ -776,21 +776,18 @@ global_variable
 u32
 Scaff_Painting_Id = 0;
 
-
-global_variable
-original_contig *
-Original_Contigs;
+// All the contigs in the input PretextMap
+global_variable original_contig *Original_Contigs;
 
 global_variable
 u32
 Number_of_Original_Contigs;
 
-
-
-
-global_variable
-contigs *
-Contigs;
+// All the "clickable" contigs which are mapped to a pixel on screen and are
+// therefore editable.  The maximum number of editable contigs is determined
+// by the `Number_of_Pixels_1D`.  Where many, small contigs fall within the
+// same pixel, only the first will be editable.
+global_variable map_contigs *Contigs;
 
 global_function
 u08
@@ -1765,7 +1762,8 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
     {
         // Ensure that contigPtr does not exceed the value of the maximum
         // number of contigs.
-        if (contigPtr >= Max_Number_of_Contigs) break;
+        if (contigPtr >= Contigs->numberOfContigs)
+            break;
 
         ++length; // current fragment length
 
@@ -1773,27 +1771,25 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
         // already been initialised.
         pixelIdx = index + 1;
 
-        // The original contig ID of the pixel. The value of %
-        // Max_Number_of_Contigs is not used here to distinguish the segments
-        // after the cut.
+        // The original contig ID of the pixel.
         u32 original_contig_id = Map_State->originalContigIds[pixelIdx];
 
         // Local coordinates of a pixel
         u32 coord = Map_State->contigRelCoords[pixelIdx];
-        
-        if (
-            original_contig_id != lastId_original_contig || 
-            (inverted && coord != (lastCoord - 1)) || 
-            (!inverted && coord != (lastCoord + 1)) 
-        ) // not a continuous fragment
-        {   
-            // update Original_Contigs: contigMapPixels
-            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].contigMapPixels[
-                Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs
-            ] = pixelIdx - 1 - (length >> 1);
 
-            // update Original_Contigs: nContigs, contigMapPixels
-            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs++;
+        if (original_contig_id != lastId_original_contig ||
+            (inverted && coord != (lastCoord - 1)) ||
+            (!inverted && coord != (lastCoord + 1)))
+        {
+            // New contig or fragment of a contig
+
+            // update Original_Contigs: contigMapPixels, recording the
+            // mid-point of the fragment.
+            Original_Contigs[lastId_original_contig]
+                .contigMapPixels[Original_Contigs[lastId_original_contig].nContigs] = pixelIdx - 1 - (length >> 1);
+
+            // update Original_Contigs: nContigs
+            Original_Contigs[lastId_original_contig].nContigs++;
 
             // Get the pointer to the previous contig
             contig *last_cont = Contigs->contigs_arr + contigPtr;
@@ -1832,28 +1828,22 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
             // Save the scaffold ID
             lastScaffID = thisScaffID;
 
-
             // The remainder indicates the digit position of the 8-digit
             // number. If the remainder is not reversed, the corresponding
             // digit is 0; if the remainder is reversed, the corresponding
             // digit is 1.
 
-            // Determine if the previous contig is reversed.
+            // Set the bit in the `contigInvertFlags` array that flags if the
+            // contig is inverted.
             if (IsContigInverted(contigPtr))
             {
-                // Bitwise operation to update the contig flags.
-                // ---------------------------------------------
-                // Each set of 8 segments is represented by a u08 symbol,
-                // where each bit represents a positive or negative segment,
-                // and the remainder indicates which segment in the set of 8.
-                // If there is no positive or negative segment, the
-                // corresponding bit is 0.
-                if (!inverted) Contigs->contigInvertFlags[contigPtr >> 3] &= ~(1 << (contigPtr & 7));
+                if (!inverted)
+                    Contigs->contigInvertFlags[contigPtr >> 3] &= ~(1 << (contigPtr & 7));
             }
             else
             {
-                // If reversed, the corresponding bit will be 1.
-                if (inverted) Contigs->contigInvertFlags[contigPtr >> 3] |= (1 << (contigPtr & 7));
+                if (inverted)
+                    Contigs->contigInvertFlags[contigPtr >> 3] |= (1 << (contigPtr & 7));
             }
 
             // Increment contigPtr by 1.
@@ -1878,10 +1868,11 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
         lastCoord = coord;
     }
 
-    if (contigPtr < Max_Number_of_Contigs)
+    if (contigPtr < Contigs->numberOfContigs)
     // Update the fragment information of the last contig.
     {
-        (Original_Contigs + lastId_original_contig % Max_Number_of_Contigs)->contigMapPixels[(Original_Contigs + lastId_original_contig % Max_Number_of_Contigs)->nContigs++] = pixelIdx - 1 - (length >> 1); 
+        (Original_Contigs + lastId_original_contig)
+            ->contigMapPixels[(Original_Contigs + lastId_original_contig)->nContigs++] = pixelIdx - 1 - (length >> 1);
 
         ++length;
         contig *cont = Contigs->contigs_arr + contigPtr++;
@@ -1889,17 +1880,19 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
         cont->length = length;
         cont->startCoord = startCoord;
         cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1;
-        
+
         u32 thisScaffID = Map_State->scaffIds[pixelIdx];
         cont->scaffId = thisScaffID ? ((thisScaffID == lastScaffID) ? (scaffId) : (++scaffId)) : 0;
-        
+
         if (IsContigInverted(contigPtr - 1))
         {
-            if (!inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] &= ~(1 << ((contigPtr - 1) & 7));
+            if (!inverted)
+                Contigs->contigInvertFlags[(contigPtr - 1) >> 3] &= ~(1 << ((contigPtr - 1) & 7));
         }
         else
         {
-            if (inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] |= (1 << ((contigPtr - 1) & 7));
+            if (inverted)
+                Contigs->contigInvertFlags[(contigPtr - 1) >> 3] |= (1 << ((contigPtr - 1) & 7));
         }
     }
 
@@ -1917,7 +1910,7 @@ RebuildContig(u32 pixel)
     for (;;)
     {
         u32 contigId = Map_State->contigIds[pixel];
-        u32 origContigId = Map_State->get_original_contig_id(pixel);
+        u32 origContigId = Map_State->originalContigIds[pixel];
 
         u32 top = (u32)pixel;
         while (top && (Map_State->contigIds[top - 1] == contigId)) --top;
@@ -1935,7 +1928,7 @@ RebuildContig(u32 pixel)
         u08 fragmented = 0;
         ForLoop(Number_of_Pixels_1D)
         {
-            if ((Map_State->contigIds[index] != contigId) && (Map_State->get_original_contig_id(index) == origContigId))
+            if ((Map_State->contigIds[index] != contigId) && (Map_State->originalContigIds[pixel] == origContigId))
             {
                 fragmented = 1;
                 break;
@@ -1950,7 +1943,7 @@ RebuildContig(u32 pixel)
                 u32 otherPixel = 0;
                 ForLoop(Number_of_Pixels_1D)
                 {
-                    if ((Map_State->get_original_contig_id(index) == origContigId) && (Map_State->contigRelCoords[index] == (contigTopCoord - 1)))
+                    if ((Map_State->originalContigIds[pixel] == origContigId) && (Map_State->contigRelCoords[index] == (contigTopCoord - 1)))
                     {
                         otherPixel = index;
                         break;
@@ -1984,7 +1977,7 @@ RebuildContig(u32 pixel)
                 u32 otherPixel = 0;
                 ForLoop(Number_of_Pixels_1D)
                 {
-                    if ((Map_State->get_original_contig_id(index) == origContigId) && (Map_State->contigRelCoords[index] == (contigBottomCoord + 1)))
+                    if ((Map_State->originalContigIds[pixel] == origContigId) && (Map_State->contigRelCoords[index] == (contigBottomCoord + 1)))
                     {
                         otherPixel = index;
                         break;
@@ -3884,7 +3877,7 @@ Render() {
 
                 if (rightPixel > 0.0f && leftPixel < width)
                 {
-                    const char *name = (const char *)(Original_Contigs + cont->get_original_contig_id())->name;
+                    const char *name = (const char *)(Original_Contigs + cont->originalContigId)->name;
                     f32 x = (rightPixel + leftPixel) * 0.5f;
                     f32 y = my_Max(wy0, 0.0f) + 10.0f;
                     f32 textWidth = fonsTextBounds(FontStash_Context, x, y, name, 0, NULL);
@@ -3933,7 +3926,7 @@ Render() {
 
                 if (topPixel < height && bottomPixel > 0.0f)
                 {
-                    const char *name = (const char *)(Original_Contigs + cont->get_original_contig_id())->name;
+                    const char *name = (const char *)(Original_Contigs + cont->originalContigId)->name;
                     f32 y = (topPixel + bottomPixel) * 0.5f;
                     f32 x = my_Max(wx0, 0.0f) + 10.0f;
                     f32 textWidth = fonsTextBounds(FontStash_Context, x, y, name, 0, NULL);
@@ -4943,8 +4936,8 @@ Render() {
             textBoxHeight *= (3.0f + (f32)nExtra);
             textBoxHeight += (2.0f + (f32)nExtra);
 
-            u32 id1 = Map_State->get_original_contig_id(Tool_Tip_Move.pixels.x);
-            u32 id2 = Map_State->get_original_contig_id(Tool_Tip_Move.pixels.y);
+            u32 id1 = Map_State->originalContigIds[Tool_Tip_Move.pixels.x];
+            u32 id2 = Map_State->originalContigIds[Tool_Tip_Move.pixels.y];
             u32 coord1 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.x];
             u32 coord2 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.y];
             
@@ -5206,7 +5199,7 @@ Render() {
                     pix1 = pix1 ? pix1 - 1 : (pix2 < (Number_of_Pixels_1D - 1) ? pix2 + 1 : pix2);
                 }
 
-                original_contig *cont = Original_Contigs + Map_State->get_original_contig_id(pix1);
+                original_contig *cont = Original_Contigs + Map_State->originalContigIds[pix1];
 
                 u32 nPixels = Number_of_Pixels_1D;
                 f64 bpPerPixel = (f64)Total_Genome_Length / (f64)nPixels;
@@ -5225,7 +5218,7 @@ Render() {
                 if (!line1Done)
                 {
                     f64 bpEnd = bpPerPixel * (f64)Map_State->contigRelCoords[pix2];
-                    original_contig *cont2 = Original_Contigs + Map_State->get_original_contig_id(pix2);
+                    original_contig *cont2 = Original_Contigs + Map_State->originalContigIds[pix2];
                     stbsp_snprintf(line1, 64, "%s[%$.2fbp] to %s[%$.2fbp]", cont->name, bpStart, cont2->name, bpEnd);
                     if (Edit_Pixels.editing)
                     {
@@ -5974,6 +5967,8 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         char sep = '/';
 #endif
 
+        // Move `tmp` pointer to first '\0' then backup to the file separator
+        // or start of the path.
         while (*++tmp) {}
         while ((*--tmp != sep) && *tmp) {}
 
@@ -5983,12 +5978,7 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         u32 intBuff[16];
         PushStringIntoIntArray(intBuff, ArrayCount(intBuff), (u08 *)(*fileName));
 
-        /*
-        This code assumes the data in the file is stored as 4-byte integers,
-        with the values nBytesHeaderComp and nBytesHeader stored
-        sequentially. Typically, this operation is used to read the header
-        information or other fixed-format data stored in a file.
-        */
+        // The next eight bytes in the file are two 32 bit unsigned integers
         u32 nBytesHeaderComp; // Compressed data size
         u32 nBytesHeader;     // Data size after decompression
         // Read 4 bytes of data from the file and store them in the variable nBytesHeaderComp.
@@ -6039,22 +6029,21 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         FreeLastPushP(arena);
 
         /*
-        header format
-        ==========================
-        nBytes           Contents
-        --------------------------
-        8             Total_Genome_Length
-        4             Number_of_Original_Contigs
-        -------------------
-            Storage rules for Number_of_Original_Contigs
-        -------------------
-            4      contig fracs
-            64       name
-        ------------------
-        1           textureRes
-        1           nTextRes
-        1           mipMapLevels  
-
+                            Header Format
+            ================================================
+            nBytes  Contents
+            ------------------------------------------------
+                 8  Total_Genome_Length
+                 4  Number_of_Original_Contigs
+            ------------------------------------------------
+            Repeated for Number_of_Original_Contigs:
+                --------------------------------------------
+                 4  f32 fraction of genome spanned by contig
+                64  Contig name
+            ------------------------------------------------
+                 1  textureRes
+                 1  nTextRes
+                 1  mipMapLevels
         */
 
         u64 val64;
@@ -6147,7 +6136,8 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         memset(Map_State->metaDataFlags, 0, Number_of_Pixels_1D * sizeof(u64));
         f32 total = 0.0f; // The sum of all contigs, each containing a floating-point number, should finally be approximately 1.0.
         u32 lastPixel = 0;
-        u32 relCoord = 0; 
+        u32 relCoord = 0;
+        u32 nContigs = 0;  // Number of contigs with a pixel on the map
 
         // Initially, set the ID and local coordinates of each pixel in each contig.
         ForLoop(Number_of_Original_Contigs)
@@ -6158,48 +6148,51 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 
             // Number of pixels per row * Current percentage
             u32 pixel = (u32)((f64)Number_of_Pixels_1D * (f64)total);
-            
-            relCoord = 0;
-#ifdef RevCoords
-            u32 tmp = pixel - lastPixel - 1;
-#endif
-            while (lastPixel < pixel)
-            {
+
+            // If the last contig was on the same pixel this for loop will not
+            // be entered, so the original contig stored on the pixel will
+            // not be overwritten.
+            for (relCoord = 0; lastPixel < pixel; lastPixel++, relCoord++) {
+                nContigs++;
+
                 // Each pixel that corresponds to the current contig number.
                 Map_State->originalContigIds[lastPixel] = index;
 
                 // The local coordinates of each pixel in the current contig
-                Map_State->contigRelCoords[lastPixel++] =
-#ifdef RevCoords
-                    tmp - relCoord++;
-#else
-                    relCoord++;
-#endif
+                Map_State->contigRelCoords[lastPixel] = relCoord;
             }
         }
-        delete[] contigFracs;
 
-        // Addressing the issue of lastPixel being less than
-        // Number_of_Pixels_1D due to numerical calculations.
-        while (lastPixel < Number_of_Pixels_1D)
+        // The value of `lastPixel` may be less than `Number_of_Pixels_1D - 1`
+        // due to inaccuracies summing the floating point elements of
+        // `contigFracs`, in which case we fill in the rest of the map.
+        for (; lastPixel < Number_of_Pixels_1D; lastPixel++)
         {
-            // Assumes the lastPixel belongs to the last contig
-            Map_State->originalContigIds[lastPixel] = (u32)(Number_of_Original_Contigs - 1);
-            Map_State->contigRelCoords[lastPixel++] = relCoord++;   
+            // Assumes that any remaining pixels belong to the last contig
+            u32 lastContig = Number_of_Original_Contigs - 1;
+            Map_State->originalContigIds[lastPixel] = lastContig;
+            if (lastContig != Map_State->originalContigIds[lastPixel - 1]) {
+                // New contig at the last pixel.
+                relCoord = 0;
+                nContigs++;
+            }
+            Map_State->contigRelCoords[lastPixel] = relCoord++;
         }
 
-        // Declare a memory block to store contigs, which returns contigs as
-        // pointers to this block; in fact, this contains information about
-        // the entire genome.
-        Contigs = PushStructP(arena, contigs);
+        // If we kept `contigFracs` instead of deleting it, we could retrieve
+        // all the contigs within each pixel.  These are otherwise lost in
+        // the AGP output when there are multiple, short contigs within a
+        // pixel.
+        delete[] contigFracs;
 
-        // Each contig contains contigs (fragments), and there are a maximum
-        // of Max_Number_of_Contigs fragments, storing a maximum of 4096
-        // contigs.
-        Contigs->contigs_arr = PushArrayP(arena, contig, Max_Number_of_Contigs);
+        // Declare a memory block to store all the contigs which are mapped to
+        // a pixel on screen.
+        Contigs = PushStructP(arena, map_contigs);
+        Contigs->numberOfContigs = nContigs;
+        Contigs->contigs_arr = PushArrayP(arena, contig, nContigs);
 
-        // (4096 + 7) >> 3 = 512, declares storage space for 512 u08s.
-        Contigs->contigInvertFlags = PushArrayP(arena, u08, (Max_Number_of_Contigs + 7) >> 3);
+        // Reserve storage for the contig invterted bit flags
+        Contigs->contigInvertFlags = PushArrayP(arena, u08, (nContigs + 7) >> 3);
 
         // Update the current contigs based on mapstate, and update the number
         // of fragments contained in each contig in original_contigs and the
@@ -6577,27 +6570,27 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 
     // Grid Data
     {
-        PushGenericBuffer(&Grid_Data, 2 * (Max_Number_of_Contigs + 1));
+        PushGenericBuffer(&Grid_Data, 2 * (Contigs->numberOfContigs + 1));
     }
 
     // Label Box Data
     {
-        PushGenericBuffer(&Label_Box_Data, 2 * Max_Number_of_Contigs);
+        PushGenericBuffer(&Label_Box_Data, 2 * Contigs->numberOfContigs);
     }
 
-    //Scale Bar Data
+    // Scale Bar Data
     {
         PushGenericBuffer(&Scale_Bar_Data, 4 * (2 + MaxTicksPerScaleBar));
     }
 
-    //Contig Colour Bars
+    // Contig Colour Bars
     {
-        PushGenericBuffer(&Contig_ColourBar_Data, Max_Number_of_Contigs);
+        PushGenericBuffer(&Contig_ColourBar_Data, Contigs->numberOfContigs);
     }
 
-    //Scaff Bars
+    // Scaff Bars
     {
-        PushGenericBuffer(&Scaff_Bar_Data, Max_Number_of_Contigs);
+        PushGenericBuffer(&Scaff_Bar_Data, Contigs->numberOfContigs);
     }
 
     // Extensions
@@ -7572,7 +7565,8 @@ global_function
 void 
 BreakMap(
     const int& loc, 
-    const u32& ignore_len       // cut点到开头或者结尾的长度不足ignore_len的contig不会被切断
+    const u32& ignore_len  // Contigs whose length from the cut point to the beginning
+                           // or end is less than ignore_len will not be cut.
 )
 {   
     if (loc >= Number_of_Pixels_1D)
@@ -7588,21 +7582,33 @@ BreakMap(
 
     s32 ptr_left = (s32)loc, ptr_right = (s32)loc;
     u08 inversed = IsContigInverted(contig_id);
-    while ( // 从loc向左遍历，找到最后一个满足条件的像素点索引
-        ptr_left > 0 && 
-        Map_State->contigIds[ptr_left] == contig_id && 
-        (Map_State->contigRelCoords[ptr_left-1] ==  Map_State->contigRelCoords[ptr_left]+ (inversed ? +1 : -1)) ) { --ptr_left; };
-    while ( // 从loc向右遍历，找到最后一个满足条件的像素点索引
-        ptr_right < Number_of_Pixels_1D-1 && 
-        Map_State->contigIds[ptr_right] == contig_id && 
-        (Map_State->contigRelCoords[ptr_right] ==  Map_State->contigRelCoords[ptr_right+1]+ (inversed ? +1 : -1)) ) {++ptr_right;};
-    
+
+    // Iterate from loc to the left to find the index of the last pixel that
+    // meets the condition.
+    while (
+        ptr_left > 0 &&
+        Map_State->contigIds[ptr_left] == contig_id &&
+        (Map_State->contigRelCoords[ptr_left - 1] == Map_State->contigRelCoords[ptr_left] + (inversed ? +1 : -1)))
+    {
+        --ptr_left;
+    };
+
+    // Iterate from loc to the right to find the index of the last pixel that
+    // meets the condition.
+    while (
+        ptr_right < Number_of_Pixels_1D - 1 &&
+        Map_State->contigIds[ptr_right] == contig_id &&
+        (Map_State->contigRelCoords[ptr_right] == Map_State->contigRelCoords[ptr_right + 1] + (inversed ? +1 : -1)))
+    {
+        ++ptr_right;
+    };
+
     int l_len = loc - ptr_left + 1, r_len = ptr_right - loc ; // treat the loc as the right side
     if (l_len <= (ignore_len) || r_len <= (ignore_len-1) )  
     {   
         fmt::print(
             "[Pixel Cut::warning] original_contig_id {} current_contig_id {}, pixel range: [{}, cut({}), {}], left_len({})<=ignore_len({}) or right_len({})<=ignore_len({}-1), cut at loc: ({}) is ignored\n", 
-            original_contig_id % Max_Number_of_Contigs, 
+            original_contig_id,
             contig_id, 
             ptr_left, 
             loc, 
@@ -7616,21 +7622,21 @@ BreakMap(
     // cut the contig by amending the original Contig Ids.
     for (u32 tmp = loc + 1; tmp <= ptr_right; tmp++) // cut_loc is included as left
     {   
-        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Max_Number_of_Contigs))
+        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Contigs->numberOfContigs))
         {
-            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the max number of contigs ({}), file {}, line {}\n", tmp, 
-            Max_Number_of_Contigs, 
-            (u64)Map_State->originalContigIds[tmp] + Max_Number_of_Contigs, 
+            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the number of mapped contigs ({}), file {}, line {}\n", tmp,
+            Contigs->numberOfContigs,
+            (u64)Map_State->originalContigIds[tmp] + Contigs->numberOfContigs,
             std::numeric_limits<u32>::max(), 
             __FILE__, __LINE__);
             assert(0);
         }
-        Map_State->originalContigIds[tmp] += Max_Number_of_Contigs;  // NOTE: the number can not exceed the max number 2**32 - 1 = 4294967295. However, it is not easy to exceed the max number of contigs, as 4294967295 / 4096 = 1048575.9997
+        Map_State->originalContigIds[tmp] += Contigs->numberOfContigs;
     }
 
     fmt::print(
         "[Pixel Cut] Original contig_id ({}), current_id ({}), pixel range: [{}, {}] {} inversed, cut at {}\n", 
-        original_contig_id % Max_Number_of_Contigs,
+        original_contig_id,
         contig_id, 
         ptr_left, 
         ptr_right, 
@@ -7744,7 +7750,7 @@ void cut_frags(const std::vector<int>& problem_locs, bool consider_gap_extension
 
 void AutoCurationFromFragsOrder(
     const FragsOrder* frags_order_,
-    contigs* contigs_,
+    map_contigs* contigs_,
     map_state* map_state_, 
     SelectArea* select_area) 
 {   
@@ -7979,7 +7985,7 @@ std::unordered_map<s32, std::vector<s32>> collect_hap_cluster(
 
     for (const auto& i : selected_area.selected_frag_ids)
     {
-        std::string original_contig_name = std::string((char*)(Original_Contigs+((Contigs->contigs_arr+i)->get_original_contig_id()))->name);
+        std::string original_contig_name = std::string((char*)(Original_Contigs+((Contigs->contigs_arr+i)->originalContigId))->name);
         std::transform(original_contig_name.begin(), original_contig_name.end(), original_contig_name.begin(), 
             [](unsigned char c) { return std::tolower(c); });
         if (original_contig_name.find("hap") != std::string::npos)
@@ -11548,9 +11554,9 @@ CopyEditsToClipBoard(GLFWwindow *window)
 
             u32 oldFrom = Map_State->contigRelCoords[start];
             u32 oldTo = Map_State->contigRelCoords[end];
-            u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
-            u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
-            u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
+            u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
+            u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
+            u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
 
             bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n",
                     index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -11611,9 +11617,9 @@ SaveEditsToFile(char *path, u08 overwrite)
 
                 u32 oldFrom = Map_State->contigRelCoords[start];
                 u32 oldTo = Map_State->contigRelCoords[end];
-                u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
-                u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
-                u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
+                u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
+                u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
+                u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
 
                 bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n\n",
                         index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -11691,7 +11697,7 @@ GenerateAGP(char *path, u08 overwrite, u08 formatSingletons, u08 preserveOrder)
                 u64 contRealEndCoord = (u64)((f64)(startCoord + cont->length) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length);
                 u64 contRealSize = contRealEndCoord - contRealStartCoord + 1;
 
-                char *contName = (char *)((Original_Contigs + cont->get_original_contig_id())->name);
+                char *contName = (char *)((Original_Contigs + cont->originalContigId)->name);
 
                 if (cont->scaffId && !type) // painted scaff
                 {
@@ -12988,9 +12994,9 @@ MainArgs
 
                                     u32 oldFrom = Map_State->contigRelCoords[start];
                                     u32 oldTo = Map_State->contigRelCoords[end];
-                                    u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
-                                    u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
-                                    u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
+                                    u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
+                                    u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
+                                    u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
                                     
                                     stbsp_snprintf((char *)buff, sizeof(buff), "Edit %d:", index + 1);
                                     nk_label(NK_Context, (const char *)buff, NK_TEXT_LEFT);
@@ -13099,7 +13105,7 @@ MainArgs
 
                         // Input Sequences
                         {   
-                            std::string input_sequence_name = fmt::format("Input Sequences ({} / Max:{})", Number_of_Original_Contigs, Max_Number_of_Contigs);
+                            std::string input_sequence_name = fmt::format("Input Sequences ({} / Max:{})", Number_of_Original_Contigs, Contigs->numberOfContigs);
                             nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
                             if (nk_tree_push(NK_Context, NK_TREE_TAB, input_sequence_name.c_str(), NK_MINIMIZED))
                             {   
@@ -13196,7 +13202,7 @@ MainArgs
                                                     u32 startCoord = cont->startCoord;
                                                     u32 endCoord = IsContigInverted(index2) ? (startCoord - cont->length + 1) : (startCoord + cont->length);
 
-                                                    stbsp_snprintf((char *)buff, sizeof(buff), "%s [%$" PRIu64 "bp to %$" PRIu64 "bp]", (char *)((Original_Contigs + cont->get_original_contig_id())->name), (u64)((f64)startCoord / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length), (u64)((f64)(endCoord) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length));
+                                                    stbsp_snprintf((char *)buff, sizeof(buff), "%s [%$" PRIu64 "bp to %$" PRIu64 "bp]", (char *)((Original_Contigs + cont->originalContigId)->name), (u64)((f64)startCoord / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length), (u64)((f64)(endCoord) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length));
                                                     if (nk_button_label(NK_Context, (char *)buff))
                                                     {
                                                         f32 p = pos + (0.5f * contLen);

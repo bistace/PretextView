@@ -28,10 +28,6 @@ SOFTWARE.
 #include "utilsPretextView.h"
 #include "showWindowData.h"
 
-// NOTE: if the number exceed this value, the contig counted as N % 32768, for
-// example, contig 32768 will be counted as 0, 32769 1, 32770 as 2
-#define Max_Number_of_Contigs 65536 // 32768 // originally 4096
-
 struct
 file_atlas_entry
 {
@@ -73,15 +69,11 @@ struct contig
     u32 startCoord;       // local coordinate on the original contig
     u32 scaffId;
     u32 pad;
-
-    u32 get_original_contig_id() const 
-    {
-        return originalContigId % Max_Number_of_Contigs;
-    }
 };
 
 
-struct contigs
+// Contigs which have a pixel on the map
+struct map_contigs
 {
     u08 *contigInvertFlags = nullptr; // invert flag [num_pixels_1d / 8], 1 bit for one pixel
     contig *contigs_arr = nullptr;
@@ -109,16 +101,13 @@ struct map_state
     u32 *scaffIds = nullptr;          // [num_pixels_1d]
     u64 *metaDataFlags = nullptr;     // [num_pixels_1d], 256kb for 32768 pixels
 
-    u32 get_original_contig_id(u32 pixel) const
-    {
-        return originalContigIds[pixel] % Max_Number_of_Contigs;
-    }
-
     void restore_cutted_contigs_all(const u32& num_pixel_1d)
     {
         for (u32 i = 0; i < num_pixel_1d; i++)
         {
-            originalContigIds[i] = originalContigIds[i] % Max_Number_of_Contigs;
+            // These are now no-ops.  I don't understand what they originally did:
+            // originalContigIds[i] = originalContigIds[i] % Max_Number_of_Contigs;
+            originalContigIds[i] = originalContigIds[i];
         }
     }
 
@@ -127,10 +116,11 @@ struct map_state
         if (start_pixel < 0 || end_pixel < 0) return;
         for (u32 i = start_pixel; i <= end_pixel; i++)
         {
-            originalContigIds[i] = originalContigIds[i] % Max_Number_of_Contigs;
+            // These are now no-ops.  I don't understand what they originally did:
+            // originalContigIds[i] = originalContigIds[i] % Max_Number_of_Contigs;
+            originalContigIds[i] = originalContigIds[i];
         }
     }
-
 
     map_state(int num_pixel_1d)
     {

@@ -32,7 +32,7 @@ public:
     len in pixel, including the source and sink fragments
     */
     u32 get_selected_len(
-        const contigs* Contigs,
+        const map_contigs* Contigs,
         const bool used_for_cluster_flag=false
     ) const
     {
@@ -63,7 +63,7 @@ public:
     /*
     id of fragments to be sorted, including the source and sink fragments
     */
-    std::vector<u32> get_to_sort_frags_id(const contigs* Contigs)
+    std::vector<u32> get_to_sort_frags_id(const map_contigs* Contigs)
     {
         std::vector<u32> to_sort_frags;
         if (this->source_frag_id>=0 )
@@ -285,7 +285,7 @@ public:
         SelectArea& select_area, 
         map_state* Map_State, 
         u32 number_of_pixels_1D, 
-        contigs* Contigs,
+        map_contigs* Contigs,
         u08 exclude_flag=false
     ) // return cluster_flag
     {   

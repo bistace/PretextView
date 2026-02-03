@@ -18,7 +18,7 @@ struct Frag4compress {
     u32 total_length;
     u64* metaDataFlags = nullptr;
 
-    Frag4compress(const contigs* Contigs)
+    Frag4compress(const map_contigs* Contigs)
         : total_length(0)
     {
         re_allocate_mem(Contigs);
@@ -33,7 +33,7 @@ struct Frag4compress {
     }
 
     void re_allocate_mem( // re-initialize frags within the selected area
-        const contigs* Contigs, 
+        const map_contigs* Contigs,
         const SelectArea* select_area=nullptr, 
         bool use_for_cut_flag=false,
         bool cluster_flag=false
@@ -119,7 +119,7 @@ struct Frag4compress {
     }
 
     void re_allocate_mem( // re-initialize frags within selected fragments
-        const contigs* Contigs, 
+        const map_contigs* Contigs,
         const std::vector<s32>& selected_frag_ids_tmp
     )
     {
