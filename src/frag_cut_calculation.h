@@ -117,7 +117,7 @@ public:
     std::vector<int> get_cut_locs_pixel(
         const AutoCurationState& auto_curation_state,
         const u32* pixel_rearrange_index_, 
-        const contigs* Contigs,
+        const map_contigs* Contigs,
         const SelectArea* select_area=nullptr)
     {   
         // 设定cut的参数

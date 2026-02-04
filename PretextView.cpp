@@ -776,28 +776,28 @@ global_variable
 u32
 Scaff_Painting_Id = 0;
 
-
-global_variable
-original_contig *
-Original_Contigs;
+// All the contigs in the input PretextMap
+global_variable original_contig *Original_Contigs;
 
 global_variable
 u32
 Number_of_Original_Contigs;
 
-
-
-
-global_variable
-contigs *
-Contigs;
+// All the "clickable" contigs which are mapped to a pixel on screen and are
+// therefore editable.  The maximum number of editable contigs is determined
+// by the `Number_of_Pixels_1D`.  Where many, small contigs fall within the
+// same pixel, only the first will be editable.
+global_variable map_contigs *Contigs;
 
 global_function
 u08
 IsContigInverted(u32 index)
 {
-    return(Contigs->contigInvertFlags[index >> 3] & (1 << (index & 7)));  // 所以这个32位的数：后三位表示1所在的位数，其他的表示编号
-    // return(Contigs->contigInvertFlags[index / 8] & (1 << (index % 8)));  // check if contig is inverted  
+    // Therefore, in this 32-bit number: the last three bits represent the
+    // position of 1, and the others represent the serial number.
+    return(Contigs->contigInvertFlags[index >> 3] & (1 << (index & 7)));
+    // return(Contigs->contigInvertFlags[index / 8] & (1 << (index % 8)));
+    // check if contig is inverted
 }
 
 global_function
@@ -1738,77 +1738,141 @@ resources, click each entry to view its licence.)text";
 
 global_function
 void
-UpdateContigsFromMapState()  //  reading 从map的状态更新contigs
+UpdateContigsFromMapState()  // Reading updates contigs from the state of the map.
 {
-    u32 lastScaffID = Map_State->scaffIds[0];       // 第一个scaff的编号
+    u32 lastScaffID = Map_State->scaffIds[0];       // The number of the first scaffold
     u32 scaffId = lastScaffID ? 1 : 0;              // 
-    u32 lastId_original_contig = Map_State->originalContigIds[0];   // 第一个像素点对应的id
-    u32 lastCoord = Map_State->contigRelCoords[0];  // 第一个像素点的局部坐标
+    u32 lastId_original_contig = Map_State->originalContigIds[0];   // Contig ID of the first pixel
+    u32 lastCoord = Map_State->contigRelCoords[0];  // Local coordinates of the first pixel
     u32 contigPtr = 0;
     u32 length = 0;
     u32 startCoord = lastCoord;
-    u08 inverted = Map_State->contigRelCoords[1] < lastCoord;  // 判断是不是反转的
+    u08 inverted = Map_State->contigRelCoords[1] < lastCoord;  // Determine if it is reversed
     Map_State->contigIds[0] = 0;
     
     u32 pixelIdx = 0;
-    ForLoop(Number_of_Original_Contigs) (Original_Contigs + index)->nContigs = 0; // 将每一个contig的 片段数目 置为零
-    ForLoop(Number_of_Pixels_1D - 1)    // 遍历每一个像素点 更新 Original_Contigs， Contigs 
-    // 遍历完之后，contigPtr为214，但是Number_of_Original_Contigs = 218 
+
+    // Set the number of fragments for each contig to zero.
+    ForLoop(Number_of_Original_Contigs) (Original_Contigs + index)->nContigs = 0;
+
+    // Iterate through each pixel and update `Original_Contigs`.
+    // (After iterating through all contigs, `contigPtr` is 214, but
+    // `Number_of_Original_Contigs` is 218.)
+    ForLoop(Number_of_Pixels_1D - 1)
     {
-        if (contigPtr >= Max_Number_of_Contigs) break;  // 确保 contigPtr 不超出最大contig的数值
+        // Ensure that contigPtr does not exceed the value of the maximum
+        // number of contigs.
+        if (contigPtr >= Contigs->numberOfContigs)
+            break;
 
         ++length; // current fragment length
 
-        pixelIdx = index + 1;   // 像素点编号， 加一因为第一个已经用来初始化了
-        u32 original_contig_id = Map_State->originalContigIds[pixelIdx];  // 像素点的 original contig id, 这里 不使用 % Max_Number_of_Contigs的值是为了区分后面cut之后的片段
-        u32 coord = Map_State->contigRelCoords[pixelIdx]; // 像素点的局部坐标
-        
-        if (
-            original_contig_id != lastId_original_contig || 
-            (inverted && coord != (lastCoord - 1)) || 
-            (!inverted && coord != (lastCoord + 1)) 
-        ) // not a continuous fragment
-        {   
-            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].contigMapPixels[Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs] = pixelIdx - 1 - (length >> 1);   // update Original_Contigs: contigMapPixels
-            Original_Contigs[lastId_original_contig % Max_Number_of_Contigs].nContigs++; // update Original_Contigs: nContigs, contigMapPixels
+        // The pixel number is incremented by one because the first one has
+        // already been initialised.
+        pixelIdx = index + 1;
 
-            contig *last_cont = Contigs->contigs_arr + contigPtr; // 获取上一个contig的指针， 并且给contigPtr + 1
-            contigPtr++;
-            last_cont->originalContigId = lastId_original_contig; // 更新这个片段的id
-            last_cont->length = length;           // 更新长度
-            last_cont->startCoord = startCoord;   // 更新开头为当前片段在该contig上的局部坐标 endCoord = startCoord + length - 1
-            last_cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1; // Finished (shaoheng): memory problem: assign the pointer to the cont->metaDataFlags, the original is nullptr, the let this ptr point to the last pixel of the contig
+        // The original contig ID of the pixel.
+        u32 original_contig_id = Map_State->originalContigIds[pixelIdx];
 
-            u32 thisScaffID = Map_State->scaffIds[pixelIdx - 1]; // 上一个像素点对应的 scaffid
-            last_cont->scaffId = thisScaffID ? ((thisScaffID == lastScaffID) ? (scaffId) : (++scaffId)) : 0;  // 如果存在scaffid则（判断是不是同一个scaff，如果是则继续用scaffid，否则++scaffid），否则为0  
-            lastScaffID = thisScaffID; // 更新
+        // Local coordinates of a pixel
+        u32 coord = Map_State->contigRelCoords[pixelIdx];
 
+        if (original_contig_id != lastId_original_contig ||
+            (inverted && coord != (lastCoord - 1)) ||
+            (!inverted && coord != (lastCoord + 1)))
+        {
+            // New contig or fragment of a contig
 
-            // 余数表示8数的第几位，如果未反向则对应位为0，若反向则对应位为1
-            if (IsContigInverted(contigPtr - 1)) // 判断上一个contig是否反向
-            {   // 位操作更新contigflag
-                // 每8个片段的正反采用一个u08表示，每一个bit表示一个正反，余数表示这八个中的第几个，如果没有反向则对应位为0
-                if (!inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] &= ~(1 << ((contigPtr - 1) & 7));  
+            // update Original_Contigs: contigMapPixels, recording the
+            // mid-point of the fragment.
+            Original_Contigs[lastId_original_contig]
+                .contigMapPixels[Original_Contigs[lastId_original_contig].nContigs] = pixelIdx - 1 - (length >> 1);
+
+            // update Original_Contigs: nContigs
+            Original_Contigs[lastId_original_contig].nContigs++;
+
+            // Get the pointer to the previous contig
+            contig *last_cont = Contigs->contigs_arr + contigPtr;
+
+            // Update the ID of this clip.
+            last_cont->originalContigId = lastId_original_contig;
+
+            // Update length
+            last_cont->length = length;
+
+            // Update the beginning of the string to the local coordinates of
+            // the current segment within the contig:
+            //    endCoord = startCoord + length - 1
+            last_cont->startCoord = startCoord;
+
+            // Finished (shaoheng): memory problem: assign the pointer to the
+            // cont->metaDataFlags, the original is nullptr, the let this ptr
+            // point to the last pixel of the contig
+            last_cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1;
+
+            // The scaffID corresponding to the previous pixel.
+            u32 thisScaffID = Map_State->scaffIds[pixelIdx - 1];
+
+            // If a scaffID exists, then:
+            //   if it is the same scaffold:
+            //       continue using the scaffID
+            //   else:
+            //       increment the scaffID
+            // otherwise:
+            //   set it to 0.
+            last_cont->scaffId =
+                thisScaffID
+                    ? ((thisScaffID == lastScaffID) ? (scaffId) : (++scaffId))
+                    : 0;
+
+            // Save the scaffold ID
+            lastScaffID = thisScaffID;
+
+            // The remainder indicates the digit position of the 8-digit
+            // number. If the remainder is not reversed, the corresponding
+            // digit is 0; if the remainder is reversed, the corresponding
+            // digit is 1.
+
+            // Set the bit in the `contigInvertFlags` array that flags if the
+            // contig is inverted.
+            if (IsContigInverted(contigPtr))
+            {
+                if (!inverted)
+                    Contigs->contigInvertFlags[contigPtr >> 3] &= ~(1 << (contigPtr & 7));
             }
             else
-            {   // 如果反向则额对应位的bit为1
-                if (inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] |= (1 << ((contigPtr - 1) & 7));  // 如果反向
+            {
+                if (inverted)
+                    Contigs->contigInvertFlags[contigPtr >> 3] |= (1 << (contigPtr & 7));
             }
 
-            startCoord = coord; // 当前片段开始的坐标
-            length = 0;         // 当前片段长度清零0
-            if (pixelIdx < (Number_of_Pixels_1D - 1)) inverted = Map_State->contigRelCoords[pixelIdx + 1] < coord;  // 更新inverted
+            // Increment contigPtr by 1.
+            contigPtr++;
+
+            startCoord = coord; // Coordinates of the start of the current segment
+            length = 0;         // Current segment length reset to 0
+            // Update inverted
+            if (pixelIdx < (Number_of_Pixels_1D - 1))
+                inverted = Map_State->contigRelCoords[pixelIdx + 1] < coord;
         }
-        // 更新上一个id和局部坐标
-        Map_State->contigIds[pixelIdx] = (u32)contigPtr; // 像素点对应的 片段id 修改为当前的统计得到片段id
-        lastId_original_contig = original_contig_id;     // 更新上一个像素点的id
-        lastCoord = coord; // 更新上一个像素点的局部坐标
+        // Update the previous ID and local coordinates.
+
+        // Modify the fragment ID corresponding to the pixel to the fragment
+        // ID obtained from the current statistics.
+        Map_State->contigIds[pixelIdx] = (u32)contigPtr;
+
+        // Update the ID of the previous pixel.
+        lastId_original_contig = original_contig_id;
+
+        // Update the local coordinates of the previous pixel
+        lastCoord = coord;
     }
 
-    if (contigPtr < Max_Number_of_Contigs) //  contigptr 小于 Number_of_Original_Contigs
-    // 更新最后一个contig的最后一个片段信息
+    if (contigPtr < Contigs->numberOfContigs)
+    // Update the fragment information of the last contig.
     {
-        (Original_Contigs + lastId_original_contig % Max_Number_of_Contigs)->contigMapPixels[(Original_Contigs + lastId_original_contig % Max_Number_of_Contigs)->nContigs++] = pixelIdx - 1 - (length >> 1); 
+        (Original_Contigs + lastId_original_contig)
+            ->contigMapPixels[(Original_Contigs + lastId_original_contig)->nContigs++] = pixelIdx - 1 - (length >> 1);
 
         ++length;
         contig *cont = Contigs->contigs_arr + contigPtr++;
@@ -1816,17 +1880,19 @@ UpdateContigsFromMapState()  //  reading 从map的状态更新contigs
         cont->length = length;
         cont->startCoord = startCoord;
         cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1;
-        
+
         u32 thisScaffID = Map_State->scaffIds[pixelIdx];
         cont->scaffId = thisScaffID ? ((thisScaffID == lastScaffID) ? (scaffId) : (++scaffId)) : 0;
-        
+
         if (IsContigInverted(contigPtr - 1))
         {
-            if (!inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] &= ~(1 << ((contigPtr - 1) & 7));
+            if (!inverted)
+                Contigs->contigInvertFlags[(contigPtr - 1) >> 3] &= ~(1 << ((contigPtr - 1) & 7));
         }
         else
         {
-            if (inverted) Contigs->contigInvertFlags[(contigPtr - 1) >> 3] |= (1 << ((contigPtr - 1) & 7));
+            if (inverted)
+                Contigs->contigInvertFlags[(contigPtr - 1) >> 3] |= (1 << ((contigPtr - 1) & 7));
         }
     }
 
@@ -1844,7 +1910,7 @@ RebuildContig(u32 pixel)
     for (;;)
     {
         u32 contigId = Map_State->contigIds[pixel];
-        u32 origContigId = Map_State->get_original_contig_id(pixel);
+        u32 origContigId = Map_State->originalContigIds[pixel];
 
         u32 top = (u32)pixel;
         while (top && (Map_State->contigIds[top - 1] == contigId)) --top;
@@ -1862,7 +1928,7 @@ RebuildContig(u32 pixel)
         u08 fragmented = 0;
         ForLoop(Number_of_Pixels_1D)
         {
-            if ((Map_State->contigIds[index] != contigId) && (Map_State->get_original_contig_id(index) == origContigId))
+            if ((Map_State->contigIds[index] != contigId) && (Map_State->originalContigIds[pixel] == origContigId))
             {
                 fragmented = 1;
                 break;
@@ -1877,7 +1943,7 @@ RebuildContig(u32 pixel)
                 u32 otherPixel = 0;
                 ForLoop(Number_of_Pixels_1D)
                 {
-                    if ((Map_State->get_original_contig_id(index) == origContigId) && (Map_State->contigRelCoords[index] == (contigTopCoord - 1)))
+                    if ((Map_State->originalContigIds[pixel] == origContigId) && (Map_State->contigRelCoords[index] == (contigTopCoord - 1)))
                     {
                         otherPixel = index;
                         break;
@@ -1911,7 +1977,7 @@ RebuildContig(u32 pixel)
                 u32 otherPixel = 0;
                 ForLoop(Number_of_Pixels_1D)
                 {
-                    if ((Map_State->get_original_contig_id(index) == origContigId) && (Map_State->contigRelCoords[index] == (contigBottomCoord + 1)))
+                    if ((Map_State->originalContigIds[pixel] == origContigId) && (Map_State->contigRelCoords[index] == (contigBottomCoord + 1)))
                     {
                         otherPixel = index;
                         break;
@@ -3811,7 +3877,7 @@ Render() {
 
                 if (rightPixel > 0.0f && leftPixel < width)
                 {
-                    const char *name = (const char *)(Original_Contigs + cont->get_original_contig_id())->name;
+                    const char *name = (const char *)(Original_Contigs + cont->originalContigId)->name;
                     f32 x = (rightPixel + leftPixel) * 0.5f;
                     f32 y = my_Max(wy0, 0.0f) + 10.0f;
                     f32 textWidth = fonsTextBounds(FontStash_Context, x, y, name, 0, NULL);
@@ -3860,7 +3926,7 @@ Render() {
 
                 if (topPixel < height && bottomPixel > 0.0f)
                 {
-                    const char *name = (const char *)(Original_Contigs + cont->get_original_contig_id())->name;
+                    const char *name = (const char *)(Original_Contigs + cont->originalContigId)->name;
                     f32 y = (topPixel + bottomPixel) * 0.5f;
                     f32 x = my_Max(wx0, 0.0f) + 10.0f;
                     f32 textWidth = fonsTextBounds(FontStash_Context, x, y, name, 0, NULL);
@@ -4870,8 +4936,8 @@ Render() {
             textBoxHeight *= (3.0f + (f32)nExtra);
             textBoxHeight += (2.0f + (f32)nExtra);
 
-            u32 id1 = Map_State->get_original_contig_id(Tool_Tip_Move.pixels.x);
-            u32 id2 = Map_State->get_original_contig_id(Tool_Tip_Move.pixels.y);
+            u32 id1 = Map_State->originalContigIds[Tool_Tip_Move.pixels.x];
+            u32 id2 = Map_State->originalContigIds[Tool_Tip_Move.pixels.y];
             u32 coord1 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.x];
             u32 coord2 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.y];
             
@@ -5133,7 +5199,7 @@ Render() {
                     pix1 = pix1 ? pix1 - 1 : (pix2 < (Number_of_Pixels_1D - 1) ? pix2 + 1 : pix2);
                 }
 
-                original_contig *cont = Original_Contigs + Map_State->get_original_contig_id(pix1);
+                original_contig *cont = Original_Contigs + Map_State->originalContigIds[pix1];
 
                 u32 nPixels = Number_of_Pixels_1D;
                 f64 bpPerPixel = (f64)Total_Genome_Length / (f64)nPixels;
@@ -5152,7 +5218,7 @@ Render() {
                 if (!line1Done)
                 {
                     f64 bpEnd = bpPerPixel * (f64)Map_State->contigRelCoords[pix2];
-                    original_contig *cont2 = Original_Contigs + Map_State->get_original_contig_id(pix2);
+                    original_contig *cont2 = Original_Contigs + Map_State->originalContigIds[pix2];
                     stbsp_snprintf(line1, 64, "%s[%$.2fbp] to %s[%$.2fbp]", cont->name, bpStart, cont2->name, bpEnd);
                     if (Edit_Pixels.editing)
                     {
@@ -5901,73 +5967,90 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         char sep = '/';
 #endif
 
+        // Move `tmp` pointer to first '\0' then backup to the file separator
+        // or start of the path.
         while (*++tmp) {}
         while ((*--tmp != sep) && *tmp) {}
 
         *fileName = tmp + 1;
 
+        // Transfer the characters to the intbuff array.
         u32 intBuff[16];
-        PushStringIntoIntArray(intBuff, ArrayCount(intBuff), (u08 *)(*fileName)); // 将字符穿转移到intbuff数组中
+        PushStringIntoIntArray(intBuff, ArrayCount(intBuff), (u08 *)(*fileName));
 
-        /*
-        这段代码假设文件中的数据是以 4 字节整数的形式存储的，并且依次存储了 
-        nBytesHeaderComp 和 nBytesHeader 两个值。通常情况下，
-        这种操作用于读取文件中存储的数据头部信息或者其他固定格式的数据。
-        */
-        u32 nBytesHeaderComp; // 压缩后数据大小
-        u32 nBytesHeader;     // 解压后数据大小
-        fread(&nBytesHeaderComp, 1, 4, file);  // 从文件中读取 4 个字节的数据，并将其存储在 nBytesHeaderComp 变量中 
+        // The next eight bytes in the file are two 32 bit unsigned integers
+        u32 nBytesHeaderComp; // Compressed data size
+        u32 nBytesHeader;     // Data size after decompression
+        // Read 4 bytes of data from the file and store them in the variable nBytesHeaderComp.
+        fread(&nBytesHeaderComp, 1, 4, file);
         fread(&nBytesHeader, 1, 4, file);
 
-        u08 *header = PushArrayP(arena, u08, nBytesHeader);                // 从内存池中分配u08 数组，大小为 nBytesHeader
-        u08 *compressionBuffer = PushArrayP(arena, u08, nBytesHeaderComp); // 从内存池中分配u08 数组，大小为 nBytesHeaderComp
+        // Allocate an array u08 from the memory pool, with a size of nBytesHeader.
+        u08 *header = PushArrayP(arena, u08, nBytesHeader);
 
-        fread(compressionBuffer, 1, nBytesHeaderComp, file);  // nBytesHeaderComp个字节的压缩数据，存储到compressionBuffer
-        *headerHash = FastHash64( // head的地址采用fasthash加密，作为存储文件的文件名。 compressionBuffer所指向的值进行hash得到一个名字，作为存储文件的文件名
+        // Allocate an array u08 from the memory pool, with a size of nBytesHeaderComp.
+        u08 *compressionBuffer = PushArrayP(arena, u08, nBytesHeaderComp);
+
+        // Store nBytesHeaderComp bytes of compressed data in compressionBuffer.
+        fread(compressionBuffer, 1, nBytesHeaderComp, file);
+
+        // The address of `head` is encrypted using fasthash and used as the
+        // filename for the stored file.  The value pointed to by
+        // `compressionBuffer` is hashed to obtain a name, which is also used
+        // as the filename for the stored file.
+        *headerHash = FastHash64(
             compressionBuffer, 
             nBytesHeaderComp,  
             FastHash64(intBuff, sizeof(intBuff), 0xbafd06832de619c2)
             );
         // fprintf(stdout, "The headerHash is calculated accordig to the compressed head, the hash number is (%llu) and the cache file name is (%s)\n", *headerHash, (u08*) headerHash);
-        if (
-            libdeflate_deflate_decompress(
-            Decompressor,                     // 指向 解压缩器 
-            (const void *)compressionBuffer,  // 指向 即将解压的数据，(const void *)强制转换为不可修改的内存块
-            nBytesHeaderComp,                 // 解压缩的字节数
-            (void *)header,                   // 指向 解压缩后存储的位置，转换为通用内存块
-            nBytesHeader,                     // 解压后预计大小
-            NULL)                             // 表示不传递其他参数给压缩函数
-        )
-        {
-            return(decompErr); // decompress err
+        if (libdeflate_deflate_decompress(
+                Decompressor,                    // Pointer to decompressor.
+                (const void *)compressionBuffer, // Pointer to the data to be
+                                                 // decompressed; (const void *)
+                                                 // is forcibly cast to an
+                                                 // immutable memory block.
+                nBytesHeaderComp, // Number of bytes to be decompressed.
+                (void *)header,   // Pointer to the location where the
+                                  // decompressed data will be stored, converted
+                                  // into a general-purpose memory block.
+                nBytesHeader,     // Expected size after decompression.
+                NULL) // Optional pointer for writing the size of the
+                      // decompressed data to (not given).
+        ) {
+          return (decompErr); // decompress err
         }
-        FreeLastPushP(arena); // comp buffer  释放内存池（arena）中最近一次通过 PushArrayP 宏分配的内存空间
-                              // 遍历内存池链表，找到最后一个内存池，并释放其最近一次分配的内存空间。防止内存泄漏
+
+        // The `comp buffer` function releases the memory space most recently
+        // allocated via the `PushArrayP` macro in the memory pool(arena). It
+        // iterates through the memory pool list, finds the last memory pool,
+        // and releases its most recently allocated memory space. This
+        // prevents memory leaks.
+        FreeLastPushP(arena);
 
         /*
-        header的格式
-        ==========================
-        nBytes           Contents
-        --------------------------
-        8             Total_Genome_Length
-        4             Number_of_Original_Contigs
-        -------------------
-            Number_of_Original_Contigs 个 contigs 的存储规则 
-        -------------------
-            4      contig fracs
-            64       name
-        ------------------
-        1           textureRes
-        1           nTextRes
-        1           mipMapLevels  
-
+                            Header Format
+            ================================================
+            nBytes  Contents
+            ------------------------------------------------
+                 8  Total_Genome_Length
+                 4  Number_of_Original_Contigs
+            ------------------------------------------------
+            Repeated for Number_of_Original_Contigs:
+                --------------------------------------------
+                 4  f32 fraction of genome spanned by contig
+                64  Contig name
+            ------------------------------------------------
+                 1  textureRes
+                 1  nTextRes
+                 1  mipMapLevels
         */
 
         u64 val64;
-        u08 *ptr = (u08 *)&val64;  // 获取val64存储的 八位无符号整型（u08）的指针
+        u08 *ptr = (u08 *)&val64;  // Get a pointer to the 8-bit unsigned integer (u08) stored in val64.
         ForLoop(8)
         {
-            *ptr++ = *header++;    // 指针赋值给到val64的大小 -> 整个基因的长度
+            *ptr++ = *header++;    // The pointer is assigned the size of val64 -> the length of the entire genome.
         }
         Total_Genome_Length = val64;
 
@@ -5975,120 +6058,171 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
         ptr = (u08 *)&val32;
         ForLoop(4)
         {
-            *ptr++ = *header++;
+            *ptr++ = *header++;  // The pointer is assigned to the value of val32 -> the number of contigs.
         }
-        Number_of_Original_Contigs = val32;   // 指针赋值给到val32的值 -> contigs的数目
+        Number_of_Original_Contigs = val32;
 
-        // 从内存池中分配存储原始 contig 的数组内存，类型为 original_contig，数组长度为 Number_of_Original_Contigs
+        // Allocate an array of memory from the memory pool to store the
+        // original contigs.  The holds structs of type `original_contig`,
+        // and the array length is `Number_of_Original_Contigs`.
         Original_Contigs = PushArrayP(arena, original_contig, Number_of_Original_Contigs);
-        // 分配一个存储浮点数的数组
+
+        // Allocate an array to store floating-point numbers.
         // f32 *contigFracs = PushArrayP(arena, f32, Number_of_Original_Contigs);
         f32 *contigFracs = new f32[Number_of_Original_Contigs];
-        ForLoop(Number_of_Original_Contigs) // 读取 contigs fraction (f32) and name
+        ForLoop(Number_of_Original_Contigs)  // Read contigs fraction (f32) and name
         {
 
             f32 frac;
             u32 name[16];
 
-            // 读取每个contig 对应的一个f32
+            // Read an f32 corresponding to each contig
             ptr = (u08 *)&frac;
-            ForLoop2(4)           // 从header中读取4个字节的数据存储到frac中 
+            ForLoop2(4)  // Read 4 bytes of data from the header and store them in frac.
             {
                 *ptr++ = *header++;
             }
-            contigFracs[index] = frac; // 将这个f32 存储到 contigFracs[index] 中
+            contigFracs[index] = frac;  // Store this f32 in contigFracs[index].
             
-            // 读取contig的名字
+            // Read the name of the contig
             ptr = (u08 *)name;
             ForLoop2(64)
             {
                 *ptr++ = *header++;
             }
-            // contig name赋值
+
+            // Contig name assignment
             ForLoop2(16)
             {
-                Original_Contigs[index].name[index2] = name[index2];   // 将 u32 name[16] 给到每一个contig  的name
+                Original_Contigs[index].name[index2] = name[index2];  // Assign u32 name[16] to the name of each contig.
             }
             
-            (Original_Contigs + index)->contigMapPixels = PushArrayP(arena, u32, Number_of_Pixels_1D); // 为每个contig 的 mapPixels 变量 申请内存
-            (Original_Contigs + index)->nContigs = 0; 
+            // Allocate memory for the mapPixels variable for each contig.
+            (Original_Contigs + index)->contigMapPixels = PushArrayP(arena, u32, Number_of_Pixels_1D);
+            (Original_Contigs + index)->nContigs = 0;
         }
 
-        u08 textureRes = *header++;  // 分辨率
-        u08 nTextRes = *header++;    // 纹理数目
-        u08 mipMapLevels = *header;  // ？？
+        u08 textureRes = *header++;  // Resolution
+        u08 nTextRes = *header++;    // Number of textures
+        u08 mipMapLevels = *header;  // Number of mipmap levels  (https://en.wikipedia.org/wiki/Mipmap)
 
-        Texture_Resolution = Pow2(textureRes);   // 纹理分辨率 当前显示的像素点个数，1024 
-        Number_of_Textures_1D = Pow2(nTextRes);  // 一维纹理数目 可以放大的次数，每一个像素点可以放大32次，
+        // Texture resolution: The number of pixels currently displayed, 1024.
+        Texture_Resolution = Pow2(textureRes);
+
+        // The number of times a one-dimensional texture can be magnified; each pixel can be magnified 32 times.
+        Number_of_Textures_1D = Pow2(nTextRes);
+
         Number_of_MipMaps = mipMapLevels;
 
-        Number_of_Pixels_1D = Number_of_Textures_1D * Texture_Resolution; // 更新一维数据的长度
+        // Update the length of one-dimensional data
+        Number_of_Pixels_1D = Number_of_Textures_1D * Texture_Resolution;
 
         // update the pixel_cut consider range if high resolution
         if (Number_of_Pixels_1D > 32768) auto_curation_state.auto_cut_diag_window_for_pixel_mean = 16;
 
-        Map_State = PushStructP(arena, map_state);                                   // 从内存池中分配一个包含 map_state 结构的内存块，并返回指向该结构的指针， 存储contigs map到图像中的数据
-        Map_State->contigIds = PushArrayP(arena, u32, Number_of_Pixels_1D);          // 从内存池中分配存储 contigIds 的数组，数组长度为 Number_of_Pixels_1D
-        Map_State->originalContigIds = PushArrayP(arena, u32, Number_of_Pixels_1D);  // 
-        Map_State->contigRelCoords = PushArrayP(arena, u32, Number_of_Pixels_1D);    // 像素坐标
-        Map_State->scaffIds = PushArrayP(arena, u32, Number_of_Pixels_1D);           // scaffID
-        Map_State->metaDataFlags = PushArrayP(arena, u64, Number_of_Pixels_1D);      // 标记
-        memset(Map_State->scaffIds, 0, Number_of_Pixels_1D * sizeof(u32));           // 将scaffID和metaDataFlags初始化为0
-        memset(Map_State->metaDataFlags, 0, Number_of_Pixels_1D * sizeof(u64));
-        f32 total = 0.0f; // 所有contig的一个浮点数的累积, finally should approximately be 1.0
-        u32 lastPixel = 0;
-        u32 relCoord = 0; 
+        // Allocate a memory block containing a `map_state` structure from the
+        // memory pool and return a pointer to that structure to store the
+        // data that contigs map into the image.
+        Map_State = PushStructP(arena, map_state);
 
-        ForLoop(Number_of_Original_Contigs)  // 初始设定每个contig的每个像素点的id和局部坐标
+        // Allocate an array from the memory pool to store contigIds, with an array length of Number_of_Pixels_1D.
+        Map_State->contigIds = PushArrayP(arena, u32, Number_of_Pixels_1D);
+
+        Map_State->originalContigIds = PushArrayP(arena, u32, Number_of_Pixels_1D);  // 
+        Map_State->contigRelCoords = PushArrayP(arena, u32, Number_of_Pixels_1D);    // Pixel coordinates
+        Map_State->scaffIds = PushArrayP(arena, u32, Number_of_Pixels_1D);           // scaffID
+        Map_State->metaDataFlags = PushArrayP(arena, u64, Number_of_Pixels_1D);      // Markup
+        memset(Map_State->scaffIds, 0, Number_of_Pixels_1D * sizeof(u32));           // Initialize scaffID and metaDataFlags to 0.
+        memset(Map_State->metaDataFlags, 0, Number_of_Pixels_1D * sizeof(u64));
+        f32 total = 0.0f; // The sum of all contigs, each containing a floating-point number, should finally be approximately 1.0.
+        u32 lastPixel = 0;
+        u32 relCoord = 0;
+        u32 nContigs = 0;  // Number of contigs with a pixel on the map
+
+        // Initially, set the ID and local coordinates of each pixel in each contig.
+        ForLoop(Number_of_Original_Contigs)
         {
-            total += contigFracs[index]; // 当前所有contig对应的浮点数的累积，包括当前contig
-            u32 pixel = (u32)((f64)Number_of_Pixels_1D * (f64)total);  // 每行像素点数 * 当前占比
-            
-            relCoord = 0;
-#ifdef RevCoords
-            u32 tmp = pixel - lastPixel - 1;
-#endif
-            while (lastPixel < pixel)
-            {
-                Map_State->originalContigIds[lastPixel] = index; // 每一个像素点对应的都是当前contig的编号
-                Map_State->contigRelCoords[lastPixel++] =        // 每一个像素点对应的在当前contig中的局部坐标
-#ifdef RevCoords
-                    tmp - relCoord++;
-#else
-                    relCoord++;
-#endif
+            // The cumulative floating-point numbers corresponding to all
+            // current contigs, including the current contig.
+            total += contigFracs[index];
+
+            // Number of pixels per row * Current percentage
+            u32 pixel = (u32)((f64)Number_of_Pixels_1D * (f64)total);
+
+            // If the last contig was on the same pixel this for loop will not
+            // be entered, so the original contig stored on the pixel will
+            // not be overwritten.
+            for (relCoord = 0; lastPixel < pixel; lastPixel++, relCoord++) {
+                nContigs++;
+
+                // Each pixel that corresponds to the current contig number.
+                Map_State->originalContigIds[lastPixel] = index;
+
+                // The local coordinates of each pixel in the current contig
+                Map_State->contigRelCoords[lastPixel] = relCoord;
             }
         }
-        delete[] contigFracs;
-        while (lastPixel < Number_of_Pixels_1D)  // 处理数值计算导致的lastPixel小于Number_of_Pixels_1D的问题
+
+        // The value of `lastPixel` may be less than `Number_of_Pixels_1D - 1`
+        // due to inaccuracies summing the floating point elements of
+        // `contigFracs`, in which case we fill in the rest of the map.
+        for (; lastPixel < Number_of_Pixels_1D; lastPixel++)
         {
-            Map_State->originalContigIds[lastPixel] = (u32)(Number_of_Original_Contigs - 1); //假设其为最后一个contig的像素点
-            Map_State->contigRelCoords[lastPixel++] = relCoord++;   
+            // Assumes that any remaining pixels belong to the last contig
+            u32 lastContig = Number_of_Original_Contigs - 1;
+            Map_State->originalContigIds[lastPixel] = lastContig;
+            if (lastContig != Map_State->originalContigIds[lastPixel - 1]) {
+                // New contig at the last pixel.
+                relCoord = 0;
+                nContigs++;
+            }
+            Map_State->contigRelCoords[lastPixel] = relCoord++;
         }
 
-        Contigs = PushStructP(arena, contigs);              // 声明一个存储contigs的内存块， 其返回Contigs作为这个块的指针，实际上此处为整个genome的信息
-        Contigs->contigs_arr = PushArrayP(arena, contig, Max_Number_of_Contigs); // 每一个Contigs中会有contigs (片段)，一共有Max_Number_of_Contigs多个片段，最多存放4096个contigs
-        Contigs->contigInvertFlags = PushArrayP(arena, u08, (Max_Number_of_Contigs + 7) >> 3);  // (4096 + 7 ) >> 3 = 512, 声明512个u08的存储空间
+        // If we kept `contigFracs` instead of deleting it, we could retrieve
+        // all the contigs within each pixel.  These are otherwise lost in
+        // the AGP output when there are multiple, short contigs within a
+        // pixel.
+        delete[] contigFracs;
 
-        UpdateContigsFromMapState();  //  根据mapstate 跟新当前的contigs, 并且更新original_contigs里面的每个contig所包含的片段的个数和片段的中点
+        // Declare a memory block to store all the contigs which are mapped to
+        // a pixel on screen.
+        Contigs = PushStructP(arena, map_contigs);
+        Contigs->numberOfContigs = nContigs;
+        Contigs->contigs_arr = PushArrayP(arena, contig, nContigs);
 
-        u32 nBytesPerText = 0;   //  程序将一整张图分成了32*32个小格子，每一个格子被称作texture
+        // Reserve storage for the contig invterted bit flags
+        Contigs->contigInvertFlags = PushArrayP(arena, u08, (nContigs + 7) >> 3);
+
+        // Update the current contigs based on mapstate, and update the number
+        // of fragments contained in each contig in original_contigs and the
+        // midpoint of the fragments.
+        UpdateContigsFromMapState();
+
+        // The program divides the entire image into 32x32 small grids, each
+        // of which is called a texture.
+        u32 nBytesPerText = 0;
         ForLoop(Number_of_MipMaps)
         {
             nBytesPerText += Pow2((2 * textureRes--));  // sum([2**(2*i) for i in range(10, 10-Number_of_MipMaps, -1)])/2
         }
-        nBytesPerText >>= 1; // 除以 2 因为数据是经过压缩的 
-        Bytes_Per_Texture = nBytesPerText;  // 一个texture 对应的字节数目 
+        nBytesPerText >>= 1; // Divide by 2 because the data is compressed.
+        Bytes_Per_Texture = nBytesPerText;  // Number of bytes corresponding to a texture
 
         File_Atlas = PushArrayP(arena, file_atlas_entry, (Number_of_Textures_1D + 1) * (Number_of_Textures_1D >> 1));   // variable to store the data entry 
 
-        u32 currLocation = sizeof(Magic) + 8 + nBytesHeaderComp;     // current localtion of the pointer = magic_check + (u32 compressed head length) +  (u32 decompressed head length) + compressed header length  
+        // current localtion of the pointer =
+        //     magic_check
+        //     + (u32 compressed head length)
+        //     + (u32 decompressed head length)
+        //     + compressed header length
+        u32 currLocation = sizeof(Magic) + 8 + nBytesHeaderComp;
         
         // locating the pointers to data of entries
         ForLoop((Number_of_Textures_1D + 1) * (Number_of_Textures_1D >> 1)) // loop through total number of the textures
         {
             /*
-            数据结构：
+            Data Structures:
                 - magic (4 bytes)
                 - 8 bytes
                 - headercomp (nBytesHeaderComp bytes)
@@ -6097,25 +6231,44 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                     - data
 
             */
-            file_atlas_entry *entry = File_Atlas + index; // get the temprory pointer of the entry
-            u32 nBytes;      // define a u32 to save the data 
-            fread(&nBytes, 1, 4, file);    // 读取四个字节, 前四个字节存储一个u32表示大小，后面的数据存储
-            fseek(file, nBytes, SEEK_CUR); // 文件指针会向前移动 nBytes 个字节，SEEK_CUR在c标准库中被定义为1, after the loop, pointer file is moved to the end of the reading file 
-            currLocation += 4;             // 每移动一次，currLocation 增加 4 
 
-            entry->base = currLocation;    // asign the current location to File_Atlas + index  
-            entry->nBytes = nBytes;        // asign the size to File_Atlas + index
+            // get the temprory pointer of the entry
+            file_atlas_entry *entry = File_Atlas + index;
+
+            // define a u32 to save the data
+            u32 nBytes;
+
+            // Read four bytes. The first four bytes store a u32 representation
+            // of the size, and the remaining bytes store the data.
+            fread(&nBytes, 1, 4, file);
+
+            // The file pointer will move forward n bytes, and SEEK_CUR is
+            // defined as 1 in the C standard library. After the loop, pointer
+            // file is moved to the end of the reading file .
+            fseek(file, nBytes, SEEK_CUR);
+
+            // Each time you move, currLocation increases by 4.
+            currLocation += 4;
+
+            // Assign the current location to File_Atlas + index
+            entry->base = currLocation;
+
+            // Assign the size to File_Atlas + index
+            entry->nBytes = nBytes;
 
             currLocation += nBytes;
         }
 
         // Extensions
         {
-            u08 magicTest[sizeof(Extension_Magic_Bytes[0])];  // define a u08 array, to check the end of the file, use this to read the extensions 
+            // Define a u08 array, to check the end of the file, use this to
+            // read the extensions.
+            u08 magicTest[sizeof(Extension_Magic_Bytes[0])];
 
             while ((u64)(currLocation + sizeof(magicTest)) < fileSize)
             {
-                u32 bytesRead = (u32)fread(magicTest, 1, sizeof(magicTest), file); // reading 4 bytes from the file
+                // reading 4 bytes from the file
+                u32 bytesRead = (u32)fread(magicTest, 1, sizeof(magicTest), file);
                 currLocation += bytesRead;
                 if (bytesRead == sizeof(magicTest))
                 {
@@ -6125,7 +6278,10 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                         u08 *magic = (u08 *)Extension_Magic_Bytes[index];
                         ForLoop2(sizeof(magicTest))
                         {
-                            if (magic[index2] != magicTest[index2]) // magicTest is from the file, magic is from the definition // if magic this isn't the same, means no extensions found
+                            // magicTest is from the file, magic is from the
+                            // definition.  If magic this isn't the same, means
+                            // no extensions found.
+                            if (magic[index2] != magicTest[index2])
                             {
                                 foundExtension = 0;
                                 break;
@@ -6144,43 +6300,39 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
                                         fread(&compSize, 1, sizeof(u32), file);   // get the size of the extension data
                                         graph *gph = PushStructP(arena, graph);   // create the size to store the extension data
                                         extension_node *node = PushStructP(arena, extension_node);
-                                        u08 *dataPlusName = PushArrayP(arena, u08, ((sizeof(u32) * Number_of_Pixels_1D) + sizeof(gph->name) )); // there are 1024 * 32 u32 numbers. Every single one of them represents the data on a pixel.
+
+                                        // there are 1024 * 32 u32 numbers.  Every single one of them represents the data on a pixel.
+                                        u08 *dataPlusName = PushArrayP(arena, u08, ((sizeof(u32) * Number_of_Pixels_1D) + sizeof(gph->name) ));
 #pragma clang diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-align"
-                                        gph->data = (u32 *)(dataPlusName + sizeof(gph->name));  // the first 16 u32 are the name of the extention, which can include 16*32/8=64 u08 (char).
+                                        // the first 16 u32 are the name of the extention, which can include 16*32/8=64 u08 (char).
+                                        gph->data = (u32 *)(dataPlusName + sizeof(gph->name));
 #pragma clang diagnostic pop                                       
                                         extensionSize += (compSize + sizeof(u32));
                                         u08 *compBuffer = PushArrayP(arena, u08, compSize);
                                         fread(compBuffer, 1, compSize, file);    // read the extension data from the file pointer
-                                        if (libdeflate_deflate_decompress(Decompressor, (const void *)compBuffer, compSize, (void *)dataPlusName, (sizeof(u32) * Number_of_Pixels_1D) + sizeof(gph->name), NULL))   // decompress compBuffer to dataPlusName 
-                                        /* code from the libdeflate.h
-                                        enum libdeflate_result {
-                                            // Decompression was successful.  
-                                            LIBDEFLATE_SUCCESS = 0,
-
-                                            // Decompression failed because the compressed data was invalid,
-                                            * corrupt, or otherwise unsupported.  
-                                            LIBDEFLATE_BAD_DATA = 1,
-
-                                            // A NULL 'actual_out_nbytes_ret' was provided, but the data would have
-                                            * decompressed to fewer than 'out_nbytes_avail' bytes.  
-                                            LIBDEFLATE_SHORT_OUTPUT = 2,
-
-                                            // The data would have decompressed to more than 'out_nbytes_avail'
-                                            * bytes.  
-                                            LIBDEFLATE_INSUFFICIENT_SPACE = 3,
-                                        };
-                                        */
-                                        {   // unsuccessful decompress
+                                        // Decompress compBuffer to dataPlusName
+                                        if (libdeflate_deflate_decompress(
+                                                Decompressor,
+                                                (const void *)compBuffer,
+                                                compSize, (void *)dataPlusName,
+                                                (sizeof(u32) *
+                                                 Number_of_Pixels_1D) +
+                                                    sizeof(gph->name),
+                                                NULL))
+                                        {
+                                            // Unsuccessful decompression
                                             FreeLastPushP(arena); // data
                                             FreeLastPushP(arena); // graph
                                             FreeLastPushP(arena); // node
-                                        }
-                                        else
-                                        {   // successful decompress
+                                        } else {
+                                            // Successful decompression
 #pragma clang diagnostic push
 #pragma GCC diagnostic ignored "-Wcast-align"
-                                            u32 *namePtr = (u32 *)dataPlusName;  // get a temp pointer，将原来的u08指针切换为u32指针，所指向的位置相同，只是不同的解释方式
+                                            // get a temp pointer，Switching from the original u08 pointer
+                                            // to the u32 pointer will point to the same location, but the
+                                            // interpretation will be different.
+                                            u32 *namePtr = (u32 *)dataPlusName;
 #pragma clang diagnostic pop
                                             ForLoop2(ArrayCount(gph->name))  // get the graph name
                                             {
@@ -6418,27 +6570,27 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
 
     // Grid Data
     {
-        PushGenericBuffer(&Grid_Data, 2 * (Max_Number_of_Contigs + 1));
+        PushGenericBuffer(&Grid_Data, 2 * (Contigs->numberOfContigs + 1));
     }
 
     // Label Box Data
     {
-        PushGenericBuffer(&Label_Box_Data, 2 * Max_Number_of_Contigs);
+        PushGenericBuffer(&Label_Box_Data, 2 * Contigs->numberOfContigs);
     }
 
-    //Scale Bar Data
+    // Scale Bar Data
     {
         PushGenericBuffer(&Scale_Bar_Data, 4 * (2 + MaxTicksPerScaleBar));
     }
 
-    //Contig Colour Bars
+    // Contig Colour Bars
     {
-        PushGenericBuffer(&Contig_ColourBar_Data, Max_Number_of_Contigs);
+        PushGenericBuffer(&Contig_ColourBar_Data, Contigs->numberOfContigs);
     }
 
-    //Scaff Bars
+    // Scaff Bars
     {
-        PushGenericBuffer(&Scaff_Bar_Data, Max_Number_of_Contigs);
+        PushGenericBuffer(&Scaff_Bar_Data, Contigs->numberOfContigs);
     }
 
     // Extensions
@@ -7413,7 +7565,8 @@ global_function
 void 
 BreakMap(
     const int& loc, 
-    const u32& ignore_len       // cut点到开头或者结尾的长度不足ignore_len的contig不会被切断
+    const u32& ignore_len  // Contigs whose length from the cut point to the beginning
+                           // or end is less than ignore_len will not be cut.
 )
 {   
     if (loc >= Number_of_Pixels_1D)
@@ -7429,21 +7582,33 @@ BreakMap(
 
     s32 ptr_left = (s32)loc, ptr_right = (s32)loc;
     u08 inversed = IsContigInverted(contig_id);
-    while ( // 从loc向左遍历，找到最后一个满足条件的像素点索引
-        ptr_left > 0 && 
-        Map_State->contigIds[ptr_left] == contig_id && 
-        (Map_State->contigRelCoords[ptr_left-1] ==  Map_State->contigRelCoords[ptr_left]+ (inversed ? +1 : -1)) ) { --ptr_left; };
-    while ( // 从loc向右遍历，找到最后一个满足条件的像素点索引
-        ptr_right < Number_of_Pixels_1D-1 && 
-        Map_State->contigIds[ptr_right] == contig_id && 
-        (Map_State->contigRelCoords[ptr_right] ==  Map_State->contigRelCoords[ptr_right+1]+ (inversed ? +1 : -1)) ) {++ptr_right;};
-    
+
+    // Iterate from loc to the left to find the index of the last pixel that
+    // meets the condition.
+    while (
+        ptr_left > 0 &&
+        Map_State->contigIds[ptr_left] == contig_id &&
+        (Map_State->contigRelCoords[ptr_left - 1] == Map_State->contigRelCoords[ptr_left] + (inversed ? +1 : -1)))
+    {
+        --ptr_left;
+    };
+
+    // Iterate from loc to the right to find the index of the last pixel that
+    // meets the condition.
+    while (
+        ptr_right < Number_of_Pixels_1D - 1 &&
+        Map_State->contigIds[ptr_right] == contig_id &&
+        (Map_State->contigRelCoords[ptr_right] == Map_State->contigRelCoords[ptr_right + 1] + (inversed ? +1 : -1)))
+    {
+        ++ptr_right;
+    };
+
     int l_len = loc - ptr_left + 1, r_len = ptr_right - loc ; // treat the loc as the right side
     if (l_len <= (ignore_len) || r_len <= (ignore_len-1) )  
     {   
         fmt::print(
             "[Pixel Cut::warning] original_contig_id {} current_contig_id {}, pixel range: [{}, cut({}), {}], left_len({})<=ignore_len({}) or right_len({})<=ignore_len({}-1), cut at loc: ({}) is ignored\n", 
-            original_contig_id % Max_Number_of_Contigs, 
+            original_contig_id,
             contig_id, 
             ptr_left, 
             loc, 
@@ -7457,21 +7622,21 @@ BreakMap(
     // cut the contig by amending the original Contig Ids.
     for (u32 tmp = loc + 1; tmp <= ptr_right; tmp++) // cut_loc is included as left
     {   
-        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Max_Number_of_Contigs))
+        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Contigs->numberOfContigs))
         {
-            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the max number of contigs ({}), file {}, line {}\n", tmp, 
-            Max_Number_of_Contigs, 
-            (u64)Map_State->originalContigIds[tmp] + Max_Number_of_Contigs, 
+            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the number of mapped contigs ({}), file {}, line {}\n", tmp,
+            Contigs->numberOfContigs,
+            (u64)Map_State->originalContigIds[tmp] + Contigs->numberOfContigs,
             std::numeric_limits<u32>::max(), 
             __FILE__, __LINE__);
             assert(0);
         }
-        Map_State->originalContigIds[tmp] += Max_Number_of_Contigs;  // NOTE: the number can not exceed the max number 2**32 - 1 = 4294967295. However, it is not easy to exceed the max number of contigs, as 4294967295 / 4096 = 1048575.9997
+        Map_State->originalContigIds[tmp] += Contigs->numberOfContigs;
     }
 
     fmt::print(
         "[Pixel Cut] Original contig_id ({}), current_id ({}), pixel range: [{}, {}] {} inversed, cut at {}\n", 
-        original_contig_id%Max_Number_of_Contigs, 
+        original_contig_id,
         contig_id, 
         ptr_left, 
         ptr_right, 
@@ -7585,7 +7750,7 @@ void cut_frags(const std::vector<int>& problem_locs, bool consider_gap_extension
 
 void AutoCurationFromFragsOrder(
     const FragsOrder* frags_order_,
-    contigs* contigs_,
+    map_contigs* contigs_,
     map_state* map_state_, 
     SelectArea* select_area) 
 {   
@@ -7820,7 +7985,7 @@ std::unordered_map<s32, std::vector<s32>> collect_hap_cluster(
 
     for (const auto& i : selected_area.selected_frag_ids)
     {
-        std::string original_contig_name = std::string((char*)(Original_Contigs+((Contigs->contigs_arr+i)->get_original_contig_id()))->name);
+        std::string original_contig_name = std::string((char*)(Original_Contigs+((Contigs->contigs_arr+i)->originalContigId))->name);
         std::transform(original_contig_name.begin(), original_contig_name.end(), original_contig_name.begin(), 
             [](unsigned char c) { return std::tolower(c); });
         if (original_contig_name.find("hap") != std::string::npos)
@@ -11389,9 +11554,9 @@ CopyEditsToClipBoard(GLFWwindow *window)
 
             u32 oldFrom = Map_State->contigRelCoords[start];
             u32 oldTo = Map_State->contigRelCoords[end];
-            u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
-            u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
-            u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
+            u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
+            u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
+            u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
 
             bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n",
                     index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -11452,9 +11617,9 @@ SaveEditsToFile(char *path, u08 overwrite)
 
                 u32 oldFrom = Map_State->contigRelCoords[start];
                 u32 oldTo = Map_State->contigRelCoords[end];
-                u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
-                u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
-                u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
+                u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
+                u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
+                u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
 
                 bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n\n",
                         index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -11532,7 +11697,7 @@ GenerateAGP(char *path, u08 overwrite, u08 formatSingletons, u08 preserveOrder)
                 u64 contRealEndCoord = (u64)((f64)(startCoord + cont->length) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length);
                 u64 contRealSize = contRealEndCoord - contRealStartCoord + 1;
 
-                char *contName = (char *)((Original_Contigs + cont->get_original_contig_id())->name);
+                char *contName = (char *)((Original_Contigs + cont->originalContigId)->name);
 
                 if (cont->scaffId && !type) // painted scaff
                 {
@@ -12829,9 +12994,9 @@ MainArgs
 
                                     u32 oldFrom = Map_State->contigRelCoords[start];
                                     u32 oldTo = Map_State->contigRelCoords[end];
-                                    u32 *name1 = (Original_Contigs + Map_State->get_original_contig_id(start))->name;
-                                    u32 *name2 = (Original_Contigs + Map_State->get_original_contig_id(end))->name;
-                                    u32 *newName = (Original_Contigs + Map_State->get_original_contig_id(to))->name;
+                                    u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
+                                    u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
+                                    u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
                                     
                                     stbsp_snprintf((char *)buff, sizeof(buff), "Edit %d:", index + 1);
                                     nk_label(NK_Context, (const char *)buff, NK_TEXT_LEFT);
@@ -12940,7 +13105,7 @@ MainArgs
 
                         // Input Sequences
                         {   
-                            std::string input_sequence_name = fmt::format("Input Sequences ({} / Max:{})", Number_of_Original_Contigs, Max_Number_of_Contigs);
+                            std::string input_sequence_name = fmt::format("Input Sequences ({} / Max:{})", Number_of_Original_Contigs, Contigs->numberOfContigs);
                             nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 1);
                             if (nk_tree_push(NK_Context, NK_TREE_TAB, input_sequence_name.c_str(), NK_MINIMIZED))
                             {   
@@ -13037,7 +13202,7 @@ MainArgs
                                                     u32 startCoord = cont->startCoord;
                                                     u32 endCoord = IsContigInverted(index2) ? (startCoord - cont->length + 1) : (startCoord + cont->length);
 
-                                                    stbsp_snprintf((char *)buff, sizeof(buff), "%s [%$" PRIu64 "bp to %$" PRIu64 "bp]", (char *)((Original_Contigs + cont->get_original_contig_id())->name), (u64)((f64)startCoord / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length), (u64)((f64)(endCoord) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length));
+                                                    stbsp_snprintf((char *)buff, sizeof(buff), "%s [%$" PRIu64 "bp to %$" PRIu64 "bp]", (char *)((Original_Contigs + cont->originalContigId)->name), (u64)((f64)startCoord / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length), (u64)((f64)(endCoord) / (f64)Number_of_Pixels_1D * (f64)Total_Genome_Length));
                                                     if (nk_button_label(NK_Context, (char *)buff))
                                                     {
                                                         f32 p = pos + (0.5f * contLen);
