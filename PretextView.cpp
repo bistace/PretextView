@@ -783,6 +783,13 @@ global_variable
 u32
 Number_of_Original_Contigs;
 
+global_function
+u32
+GetOriginalContigBaseId(u32 originalContigId)
+{
+    return Number_of_Original_Contigs ? (originalContigId % Number_of_Original_Contigs) : originalContigId;
+}
+
 // All the "clickable" contigs which are mapped to a pixel on screen and are
 // therefore editable.  The maximum number of editable contigs is determined
 // by the `Number_of_Pixels_1D`.  Where many, small contigs fall within the
@@ -1743,6 +1750,7 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
     u32 lastScaffID = Map_State->scaffIds[0];       // The number of the first scaffold
     u32 scaffId = lastScaffID ? 1 : 0;              // 
     u32 lastId_original_contig = Map_State->originalContigIds[0];   // Contig ID of the first pixel
+    u32 lastId_original_contig_base = GetOriginalContigBaseId(lastId_original_contig);
     u32 lastCoord = Map_State->contigRelCoords[0];  // Local coordinates of the first pixel
     u32 contigPtr = 0;
     u32 length = 0;
@@ -1773,6 +1781,7 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
 
         // The original contig ID of the pixel.
         u32 original_contig_id = Map_State->originalContigIds[pixelIdx];
+        u32 original_contig_id_base = GetOriginalContigBaseId(original_contig_id);
 
         // Local coordinates of a pixel
         u32 coord = Map_State->contigRelCoords[pixelIdx];
@@ -1785,17 +1794,17 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
 
             // update Original_Contigs: contigMapPixels, recording the
             // mid-point of the fragment.
-            Original_Contigs[lastId_original_contig]
-                .contigMapPixels[Original_Contigs[lastId_original_contig].nContigs] = pixelIdx - 1 - (length >> 1);
+            Original_Contigs[lastId_original_contig_base]
+                .contigMapPixels[Original_Contigs[lastId_original_contig_base].nContigs] = pixelIdx - 1 - (length >> 1);
 
             // update Original_Contigs: nContigs
-            Original_Contigs[lastId_original_contig].nContigs++;
+            Original_Contigs[lastId_original_contig_base].nContigs++;
 
             // Get the pointer to the previous contig
             contig *last_cont = Contigs->contigs_arr + contigPtr;
 
             // Update the ID of this clip.
-            last_cont->originalContigId = lastId_original_contig;
+            last_cont->originalContigId = lastId_original_contig_base;
 
             // Update length
             last_cont->length = length;
@@ -1863,6 +1872,7 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
 
         // Update the ID of the previous pixel.
         lastId_original_contig = original_contig_id;
+        lastId_original_contig_base = original_contig_id_base;
 
         // Update the local coordinates of the previous pixel
         lastCoord = coord;
@@ -1871,12 +1881,13 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
     if (contigPtr < Contigs->numberOfContigs)
     // Update the fragment information of the last contig.
     {
-        (Original_Contigs + lastId_original_contig)
-            ->contigMapPixels[(Original_Contigs + lastId_original_contig)->nContigs++] = pixelIdx - 1 - (length >> 1);
+        u32 lastId_original_contig_base = GetOriginalContigBaseId(lastId_original_contig);
+        (Original_Contigs + lastId_original_contig_base)
+            ->contigMapPixels[(Original_Contigs + lastId_original_contig_base)->nContigs++] = pixelIdx - 1 - (length >> 1);
 
         ++length;
         contig *cont = Contigs->contigs_arr + contigPtr++;
-        cont->originalContigId = lastId_original_contig;
+        cont->originalContigId = lastId_original_contig_base;
         cont->length = length;
         cont->startCoord = startCoord;
         cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1;
@@ -2027,6 +2038,9 @@ map_edit
     }
 };
 
+global_variable
+const s32 Break_Edit_Delta = std::numeric_limits<s32>::min();
+
 struct
 waypoint;
 
@@ -2149,6 +2163,14 @@ void
 MoveWayPoints(map_edit *edit, u32 undo = 0);
 
 global_function
+u08
+BreakMap(const int& loc, const u32& ignore_len);
+
+global_function
+void
+UnbreakMap(const int& loc);
+
+global_function
 void
 AddMapEdit(s32 delta, pointui finalPixels, u32 invert)
 {
@@ -2168,6 +2190,25 @@ AddMapEdit(s32 delta, pointui finalPixels, u32 invert)
     edit->delta = (s32)delta;
     edit->finalPix1 = pix1;
     edit->finalPix2 = pix2;
+}
+
+global_function
+void
+AddBreakEdit(u32 loc)
+{
+    ++Map_Editor->nEdits;
+    Map_Editor->nUndone = 0;
+
+    map_edit *edit = Map_Editor->edits + Map_Editor->editStackPtr++;
+
+    if (Map_Editor->editStackPtr == Edits_Stack_Size)
+    {
+        Map_Editor->editStackPtr = 0;
+    }
+
+    edit->delta = Break_Edit_Delta;
+    edit->finalPix1 = loc;
+    edit->finalPix2 = loc;
 }
 
 global_function
@@ -2192,6 +2233,13 @@ UndoMapEdit()
         }
 
         map_edit *edit = Map_Editor->edits + (--Map_Editor->editStackPtr);
+
+        if (edit->delta == Break_Edit_Delta)
+        {
+            UnbreakMap((int)edit->finalPix1);
+            UpdateScaffolds();
+            return;
+        }
 
         if (edit->finalPix1 > edit->finalPix2)
         {
@@ -2221,6 +2269,14 @@ RedoMapEdit()
         if (Map_Editor->editStackPtr == Edits_Stack_Size)
         {
             Map_Editor->editStackPtr = 0;
+        }
+
+        if (edit->delta == Break_Edit_Delta)
+        {
+            BreakMap((int)edit->finalPix1, 1);
+            UpdateContigsFromMapState();
+            UpdateScaffolds();
+            return;
         }
 
         u32 start = my_Min(edit->finalPix1, edit->finalPix2);
@@ -4936,8 +4992,8 @@ Render() {
             textBoxHeight *= (3.0f + (f32)nExtra);
             textBoxHeight += (2.0f + (f32)nExtra);
 
-            u32 id1 = Map_State->originalContigIds[Tool_Tip_Move.pixels.x];
-            u32 id2 = Map_State->originalContigIds[Tool_Tip_Move.pixels.y];
+            u32 id1 = GetOriginalContigBaseId(Map_State->originalContigIds[Tool_Tip_Move.pixels.x]);
+            u32 id2 = GetOriginalContigBaseId(Map_State->originalContigIds[Tool_Tip_Move.pixels.y]);
             u32 coord1 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.x];
             u32 coord2 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.y];
             
@@ -5199,7 +5255,7 @@ Render() {
                     pix1 = pix1 ? pix1 - 1 : (pix2 < (Number_of_Pixels_1D - 1) ? pix2 + 1 : pix2);
                 }
 
-                original_contig *cont = Original_Contigs + Map_State->originalContigIds[pix1];
+                original_contig *cont = Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[pix1]);
 
                 u32 nPixels = Number_of_Pixels_1D;
                 f64 bpPerPixel = (f64)Total_Genome_Length / (f64)nPixels;
@@ -5218,7 +5274,7 @@ Render() {
                 if (!line1Done)
                 {
                     f64 bpEnd = bpPerPixel * (f64)Map_State->contigRelCoords[pix2];
-                    original_contig *cont2 = Original_Contigs + Map_State->originalContigIds[pix2];
+                    original_contig *cont2 = Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[pix2]);
                     stbsp_snprintf(line1, 64, "%s[%$.2fbp] to %s[%$.2fbp]", cont->name, bpStart, cont2->name, bpEnd);
                     if (Edit_Pixels.editing)
                     {
@@ -7562,17 +7618,17 @@ RearrangeMap(       // NOTE: VERY IMPORTANT
         
 */
 global_function
-void 
+u08
 BreakMap(
     const int& loc, 
     const u32& ignore_len  // Contigs whose length from the cut point to the beginning
                            // or end is less than ignore_len will not be cut.
 )
 {   
-    if (loc >= Number_of_Pixels_1D)
+    if (loc < 0 || loc >= (int)Number_of_Pixels_1D)
     {
         char buff[512];
-        snprintf(buff, sizeof(buff), "[Pixel Cut] Error: loc (%d) should be smaller than number of pixels (%d)", loc, Number_of_Pixels_1D);
+        snprintf(buff, sizeof(buff), "[Pixel Cut] Error: loc (%d) should be within [0, %d)", loc, Number_of_Pixels_1D);
         MY_CHECK(buff);
         assert(0);
     }
@@ -7616,22 +7672,22 @@ BreakMap(
             l_len,  ignore_len,
             r_len,  ignore_len, 
             loc);
-        return;
+        return 0;
     } 
 
     // cut the contig by amending the original Contig Ids.
     for (u32 tmp = loc + 1; tmp <= ptr_right; tmp++) // cut_loc is included as left
     {   
-        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Contigs->numberOfContigs))
+        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Number_of_Original_Contigs))
         {
-            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the number of mapped contigs ({}), file {}, line {}\n", tmp,
-            Contigs->numberOfContigs,
-            (u64)Map_State->originalContigIds[tmp] + Contigs->numberOfContigs,
+            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the max number of contigs ({}), file {}, line {}\n", tmp,
+            Number_of_Original_Contigs,
+            (u64)Map_State->originalContigIds[tmp] + Number_of_Original_Contigs,
             std::numeric_limits<u32>::max(), 
             __FILE__, __LINE__);
             assert(0);
         }
-        Map_State->originalContigIds[tmp] += Contigs->numberOfContigs;
+        Map_State->originalContigIds[tmp] += Number_of_Original_Contigs;
     }
 
     fmt::print(
@@ -7643,8 +7699,54 @@ BreakMap(
         inversed ? "(is)" : "(isn\'t)", 
         loc );
 
-    return ; 
+    return 1; 
 
+}
+
+global_function
+void
+UnbreakMap(
+    const int& loc
+)
+{
+    if (loc < 0 || (loc + 1) >= (int)Number_of_Pixels_1D)
+    {
+        return;
+    }
+
+    u32 left_id = Map_State->originalContigIds[loc];
+    u32 right_id = Map_State->originalContigIds[loc + 1];
+
+    if ((left_id % Number_of_Original_Contigs) != (right_id % Number_of_Original_Contigs))
+    {
+        return;
+    }
+    if (left_id == right_id)
+    {
+        return;
+    }
+
+    u32 right_contig_id = Map_State->contigIds[loc + 1];
+    s32 ptr_right = loc + 1;
+    u08 inversed = IsContigInverted(right_contig_id);
+    while (
+        ptr_right < (int)Number_of_Pixels_1D - 1 &&
+        Map_State->contigIds[ptr_right] == right_contig_id &&
+        (Map_State->contigRelCoords[ptr_right] == Map_State->contigRelCoords[ptr_right + 1] + (inversed ? +1 : -1)))
+    {
+        ++ptr_right;
+    };
+
+    for (u32 tmp = (u32)(loc + 1); tmp <= (u32)ptr_right; tmp++)
+    {
+        if (Map_State->originalContigIds[tmp] >= Number_of_Original_Contigs)
+        {
+            Map_State->originalContigIds[tmp] -= Number_of_Original_Contigs;
+        }
+    }
+
+    UpdateContigsFromMapState();
+    Redisplay = 1;
 }
 
 
@@ -9092,6 +9194,23 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_V:
+                    if (Edit_Mode && action != GLFW_RELEASE)
+                    {
+                        u32 start = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+                        u32 end = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+                        u32 loc = (mods & GLFW_MOD_SHIFT) ? end : start;
+                        if (BreakMap((int)loc, 1))
+                        {
+                            AddBreakEdit(loc);
+                            UpdateContigsFromMapState();
+                            UpdateScaffolds();
+                            Redisplay = 1;
+                        }
+                    }
+                    else
+                    {
+                        keyPressed = 0;
+                    }
                     break;
 
                 case GLFW_KEY_W:
@@ -10020,9 +10139,19 @@ SaveState(
                 }
                 
                 map_edit *edit = Map_Editor->edits + editStackPtr;
-                u32 x = (u32)((s32)edit->finalPix1 - edit->delta);
-                u32 y = (u32)((s32)edit->finalPix2 - edit->delta);
+                u32 x = 0;
+                u32 y = 0;
                 s32 d = edit->delta;
+                if (edit->delta == Break_Edit_Delta)
+                {
+                    x = edit->finalPix1;
+                    y = edit->finalPix2;
+                }
+                else
+                {
+                    x = (u32)((s32)edit->finalPix1 - edit->delta);
+                    y = (u32)((s32)edit->finalPix2 - edit->delta);
+                }
 
                 *fileWriter++ = ((u08 *)&x)[0];
                 *fileWriter++ = ((u08 *)&x)[1];
@@ -10037,7 +10166,7 @@ SaveState(
                 *fileWriter++ = ((u08 *)&d)[2];
                 *fileWriter++ = ((u08 *)&d)[3];
 
-                if (edit->finalPix1 > edit->finalPix2)
+                if (edit->delta != Break_Edit_Delta && edit->finalPix1 > edit->finalPix2)
                 {
                     u32 byte = (index + 1) >> 3;
                     u32 bit = (index + 1) & 7;
@@ -10590,6 +10719,17 @@ LoadState(u64 headerHash, char *path)
                         ((u08 *)&d)[1] = *fileContents++;
                         ((u08 *)&d)[2] = *fileContents++;
                         ((u08 *)&d)[3] = *fileContents++;
+
+                        if (d == Break_Edit_Delta)
+                        {
+                            if (x < Number_of_Pixels_1D && BreakMap((int)x, 1))
+                            {
+                                AddBreakEdit(x);
+                                UpdateContigsFromMapState();
+                                UpdateScaffolds();
+                            }
+                            continue;
+                        }
 
                         u32 byte = (index + 1) >> 3; // find the byte, 1 byte saves 8 invert_flag of edits
                         u32 bit = (index + 1) & 7; // find the bit in the byte
@@ -11554,9 +11694,9 @@ CopyEditsToClipBoard(GLFWwindow *window)
 
             u32 oldFrom = Map_State->contigRelCoords[start];
             u32 oldTo = Map_State->contigRelCoords[end];
-            u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-            u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-            u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+            u32 *name1 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[start]))->name;
+            u32 *name2 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[end]))->name;
+            u32 *newName = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[to]))->name;
 
             bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n",
                     index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -11617,9 +11757,9 @@ SaveEditsToFile(char *path, u08 overwrite)
 
                 u32 oldFrom = Map_State->contigRelCoords[start];
                 u32 oldTo = Map_State->contigRelCoords[end];
-                u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-                u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-                u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+                u32 *name1 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[start]))->name;
+                u32 *name2 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[end]))->name;
+                u32 *newName = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[to]))->name;
 
                 bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n\n",
                         index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -12994,9 +13134,9 @@ MainArgs
 
                                     u32 oldFrom = Map_State->contigRelCoords[start];
                                     u32 oldTo = Map_State->contigRelCoords[end];
-                                    u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-                                    u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-                                    u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+                                    u32 *name1 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[start]))->name;
+                                    u32 *name2 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[end]))->name;
+                                    u32 *newName = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[to]))->name;
                                     
                                     stbsp_snprintf((char *)buff, sizeof(buff), "Edit %d:", index + 1);
                                     nk_label(NK_Context, (const char *)buff, NK_TEXT_LEFT);
