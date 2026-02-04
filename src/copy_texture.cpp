@@ -131,7 +131,7 @@ TexturesArray4AI::TexturesArray4AI(
     u32 num_textures_1d_, 
     u32 texture_resolution_, 
     char* fileName, 
-    const contigs* Contigs)
+    const map_contigs* Contigs)
     :num_textures_1d(num_textures_1d_), texture_resolution(texture_resolution_),
     is_copied_from_buffer(false), is_compressed(false), hic_shader_initilised(false)
 {   
@@ -853,7 +853,7 @@ void TexturesArray4AI::show_collected_texture()
 void TexturesArray4AI::cal_maximum_number_of_shift(
     u32& D,
     std::vector<f32>& norm_diag_mean,
-    const contigs* Contigs,
+    const map_contigs* Contigs,
     f32 D_hic_ratio,
     u32 maximum_D,
     f32 min_hic_density)
@@ -881,7 +881,7 @@ void TexturesArray4AI::cal_maximum_number_of_shift(
 
 
 void TexturesArray4AI::cal_compressed_hic(
-    const contigs* Contigs, 
+    const map_contigs* Contigs,
     const extension_sentinel& Extensions,
     bool is_extension_required,
     bool is_massCenter_required,
@@ -1033,7 +1033,7 @@ void TexturesArray4AI::cal_compressed_hic(
 }
 
 
-f32 TexturesArray4AI::cal_diagonal_mean_within_fragments(int shift, const contigs* Contigs)
+f32 TexturesArray4AI::cal_diagonal_mean_within_fragments(int shift, const map_contigs* Contigs)
 {   
     u64 sum = 0;
     u32 cnt = 0, maxlen=0, start_coord = 0;

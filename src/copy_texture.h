@@ -354,7 +354,7 @@ private:
     bool is_copied_from_buffer;
     bool is_compressed;
 public:
-    TexturesArray4AI(u32 num_textures_1d, u32 texture_resolution, char* fileName, const contigs* Contigs);
+    TexturesArray4AI(u32 num_textures_1d, u32 texture_resolution, char* fileName, const map_contigs* Contigs);
 
     ~TexturesArray4AI();
 
@@ -406,10 +406,10 @@ public:
     void copy_buffer_to_textures(const contact_matrix *contact_matrix_, bool show_flag=false);
     void copy_buffer_to_textures_dynamic(const contact_matrix *contact_matrix_, bool show_flag=false);
 
-    f32 cal_diagonal_mean_within_fragments(int shift, const contigs* Contigs);
+    f32 cal_diagonal_mean_within_fragments(int shift, const map_contigs* Contigs);
 
     void cal_compressed_hic(
-        const contigs* Contigs, 
+        const map_contigs* Contigs,
         const extension_sentinel& Extensions,
         bool is_extension_required=true, 
         bool is_massCenter_required=true,
@@ -422,7 +422,7 @@ public:
     void cal_maximum_number_of_shift(
         u32& D,
         std::vector<f32>& norm_diag_mean,
-        const contigs* Contigs,
+        const map_contigs* Contigs,
         f32 D_hic_ratio,
         u32 maximum_D,
         f32 min_hic_density);
