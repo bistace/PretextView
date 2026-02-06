@@ -922,7 +922,9 @@ CrashSignalHandler(int sig)
     {
         case SIGSEGV: sigName = "SIGSEGV"; break;
         case SIGABRT: sigName = "SIGABRT"; break;
+#ifdef SIGBUS
         case SIGBUS: sigName = "SIGBUS"; break;
+#endif
         case SIGILL: sigName = "SIGILL"; break;
         case SIGFPE: sigName = "SIGFPE"; break;
     }
