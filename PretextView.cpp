@@ -1,8 +1,5 @@
 /*
 Copyright (c) 2024,2025 Genome Research Ltd.
-Copyright (c) 2021 Ed Harry, Wellcome Sanger Institute
-Copyright (c) 2024 Shaoheng Guan, Wellcome Sanger Institute
-Copyright (c) 2025 Yumi Sims, Wellcome Sanger Institute
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,6 +22,7 @@ SOFTWARE.
 @author: Ed Harry, Wellcome Sanger Institute
 @author: Shaoheng Guan, Wellcome Sanger Institute
 @author: Yumi Sims, yy5@sanger.ac.uk, Wellcome Sanger Institute
+@author: Chenxi Zhou, cz3@sanger.ac.uk, Wellcome Sanger Institute
 */
 
 
@@ -82,6 +80,22 @@ SOFTWARE.
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
 #pragma clang diagnostic pop
+
+#include <signal.h>
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#define PV_OPEN _open
+#define PV_WRITE _write
+#define PV_CLOSE _close
+#define PV_OPEN_FLAGS (O_WRONLY | O_CREAT | O_TRUNC | O_BINARY)
+#else
+#include <unistd.h>
+#define PV_OPEN open
+#define PV_WRITE write
+#define PV_CLOSE close
+#define PV_OPEN_FLAGS (O_WRONLY | O_CREAT | O_TRUNC)
+#endif
 
 #pragma clang diagnostic push
 #pragma GCC diagnostic ignored "-Wreserved-id-macro"
@@ -697,6 +711,38 @@ u32
 UI_On = 0;
 
 global_variable
+u08
+Debug_UI_On = 0;
+
+global_variable
+u08
+GLFW_Error_Has = 0;
+
+global_variable
+char
+GLFW_Error_Message[512] = {0};
+
+global_variable
+char
+Crash_Report_Path[256] = "pretextview_crash_report.txt";
+
+global_variable
+char
+Crash_Report_Snapshot[2048] = {0};
+
+global_variable
+error_context
+Last_Exception_Context = error_context_none;
+
+global_variable
+char
+Last_Exception_Where[128] = {0};
+
+global_variable
+char
+Last_Exception_Message[512] = {0};
+
+global_variable
 global_mode
 Global_Mode = mode_normal;
 
@@ -782,6 +828,142 @@ global_variable original_contig *Original_Contigs;
 global_variable
 u32
 Number_of_Original_Contigs;
+
+global_function
+const char *
+GetGlobalModeName(global_mode mode)
+{
+    switch (mode)
+    {
+        case mode_normal:
+            return "normal";
+        case mode_edit:
+            return "edit";
+        case mode_waypoint_edit:
+            return "waypoint";
+        case mode_scaff_edit:
+            return "scaffold";
+        case mode_meta_edit:
+            return "metadata";
+        case mode_extension:
+            return "extension";
+        case mode_select_sort_area:
+            return "select_sort_area";
+        default:
+            return "unknown";
+    }
+}
+
+global_function
+void
+CaptureException(error_context ctx, const char *where, const char *message)
+{
+    Last_Exception_Context = ctx;
+    if (where)
+    {
+        stbsp_snprintf(Last_Exception_Where, sizeof(Last_Exception_Where), "%s", where);
+    }
+    else
+    {
+        Last_Exception_Where[0] = '\0';
+    }
+    if (message)
+    {
+        stbsp_snprintf(Last_Exception_Message, sizeof(Last_Exception_Message), "%s", message);
+    }
+    else
+    {
+        Last_Exception_Message[0] = '\0';
+    }
+}
+
+global_function
+void
+UpdateCrashReportSnapshot()
+{
+    const char *currentContext = GetCurrentErrorContextName();
+    const char *currentWhere = GetCurrentErrorContextWhere();
+    const char *lastError = GetLastErrorMessage();
+    const char *lastErrorCtx = GetLastErrorContextName();
+    const char *lastErrorWhere = GetLastErrorContextWhere();
+    const char *excCtx = GetErrorContextName(Last_Exception_Context);
+
+    stbsp_snprintf(
+        Crash_Report_Snapshot,
+        sizeof(Crash_Report_Snapshot),
+        "Current context: %s%s%s\n"
+        "Last error: %s%s%s%s%s\n"
+        "Last exception: %s%s%s%s%s\n"
+        "GLFW error: %s\n",
+        currentContext ? currentContext : "none",
+        (currentWhere && currentWhere[0]) ? " (" : "",
+        (currentWhere && currentWhere[0]) ? currentWhere : "",
+        (lastError && lastError[0]) ? lastError : "<none>",
+        (lastError && lastError[0]) ? " (" : "",
+        (lastError && lastError[0]) ? lastErrorCtx : "",
+        (lastError && lastError[0] && lastErrorWhere && lastErrorWhere[0]) ? ", " : "",
+        (lastError && lastError[0] && lastErrorWhere && lastErrorWhere[0]) ? lastErrorWhere : "",
+        (lastError && lastError[0]) ? ")" : "",
+        (Last_Exception_Message[0]) ? Last_Exception_Message : "<none>",
+        (Last_Exception_Message[0]) ? " (" : "",
+        (Last_Exception_Message[0]) ? excCtx : "",
+        (Last_Exception_Message[0] && Last_Exception_Where[0]) ? ", " : "",
+        (Last_Exception_Message[0] && Last_Exception_Where[0]) ? Last_Exception_Where : "",
+        (Last_Exception_Message[0]) ? ")" : "",
+        (GLFW_Error_Has && GLFW_Error_Message[0]) ? GLFW_Error_Message : "<none>");
+}
+
+global_function
+void
+CrashSignalHandler(int sig)
+{
+    const char *sigName = "signal";
+    switch (sig)
+    {
+        case SIGSEGV: sigName = "SIGSEGV"; break;
+        case SIGABRT: sigName = "SIGABRT"; break;
+        case SIGBUS: sigName = "SIGBUS"; break;
+        case SIGILL: sigName = "SIGILL"; break;
+        case SIGFPE: sigName = "SIGFPE"; break;
+    }
+
+    int fd = PV_OPEN(Crash_Report_Path, PV_OPEN_FLAGS, 0644);
+    if (fd >= 0)
+    {
+        const char *header = "PretextView crash report\n";
+        const char *label = "Signal: ";
+        const char *newline = "\n";
+
+        auto write_all = [](int outFd, const char *s) {
+            if (!s) return;
+            size_t n = 0;
+            while (s[n]) { ++n; }
+            if (n) PV_WRITE(outFd, s, n);
+        };
+
+        write_all(fd, header);
+        write_all(fd, label);
+        write_all(fd, sigName);
+        write_all(fd, newline);
+        write_all(fd, Crash_Report_Snapshot);
+        PV_CLOSE(fd);
+    }
+
+    _exit(128 + sig);
+}
+
+global_function
+void
+InstallCrashHandler()
+{
+    signal(SIGSEGV, CrashSignalHandler);
+    signal(SIGABRT, CrashSignalHandler);
+#ifdef SIGBUS
+    signal(SIGBUS, CrashSignalHandler);
+#endif
+    signal(SIGILL, CrashSignalHandler);
+    signal(SIGFPE, CrashSignalHandler);
+}
 
 global_function
 u32
@@ -3241,6 +3423,159 @@ File_Loaded = 0;
 global_variable
 nk_color
 Theme_Colour;
+
+global_function
+void
+DebugWindowRun(struct nk_context *ctx)
+{
+    if (!Debug_UI_On)
+    {
+        return;
+    }
+
+    const char *name = "Debug Report";
+    struct nk_window *window = nk_window_find(ctx, name);
+    if (window && (window->flags & NK_WINDOW_HIDDEN))
+    {
+        window->flags &= ~(nk_flags)NK_WINDOW_HIDDEN;
+    }
+
+    if (nk_begin(
+            ctx,
+            name,
+            nk_rect(Screen_Scale.x * 10, Screen_Scale.y * 620, Screen_Scale.x * 420, Screen_Scale.y * 360),
+            NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_WINDOW_SCALABLE))
+    {
+        char buff[256];
+        nk_layout_row_dynamic(ctx, Screen_Scale.y * 20.0f, 1);
+
+        stbsp_snprintf(buff, sizeof(buff), "Mode: %s", GetGlobalModeName(Global_Mode));
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "UI_On: %u  Redisplay: %u", UI_On, Redisplay);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Loading: %u  File_Loaded: %u", Loading, File_Loaded);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        const char *currentContext = GetCurrentErrorContextName();
+        const char *currentWhere = GetCurrentErrorContextWhere();
+        if (currentWhere && currentWhere[0])
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Current context: %s (%s)", currentContext, currentWhere);
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Current context: %s", currentContext);
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        const char *lastError = GetLastErrorMessage();
+        const char *lastErrorCtx = GetLastErrorContextName();
+        const char *lastErrorWhere = GetLastErrorContextWhere();
+        if (lastError && lastError[0])
+        {
+            if (lastErrorWhere && lastErrorWhere[0])
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last error: %s (%s, %s)", lastError, lastErrorCtx, lastErrorWhere);
+            }
+            else
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last error: %s (%s)", lastError, lastErrorCtx);
+            }
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Last error: <none>");
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        if (Last_Exception_Message[0])
+        {
+            const char *excCtx = GetErrorContextName(Last_Exception_Context);
+            if (Last_Exception_Where[0])
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last exception: %s (%s, %s)", Last_Exception_Message, excCtx, Last_Exception_Where);
+            }
+            else
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last exception: %s (%s)", Last_Exception_Message, excCtx);
+            }
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Last exception: <none>");
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        if (GLFW_Error_Has && GLFW_Error_Message[0])
+        {
+            stbsp_snprintf(buff, sizeof(buff), "GLFW error: %s", GLFW_Error_Message);
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "GLFW error: <none>");
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Crash report file: %s", Crash_Report_Path);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "AutoSort: %u  AutoCut: %u", auto_sort_state, auto_cut_state);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Edit: editing=%u selecting=%u snap=%u scaffSelect=%u",
+            Edit_Pixels.editing,
+            Edit_Pixels.selecting,
+            Edit_Pixels.snap,
+            Edit_Pixels.scaffSelecting);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Pixels: x=%u y=%u",
+            Edit_Pixels.pixels.x,
+            Edit_Pixels.pixels.y);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Camera: x=%.3f y=%.3f z=%.3f",
+            Camera_Position.x,
+            Camera_Position.y,
+            Camera_Position.z);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        u32 contigCount = (File_Loaded && Contigs) ? Contigs->numberOfContigs : 0;
+        u32 edits = (Map_Editor) ? Map_Editor->nEdits : 0;
+        u32 undone = (Map_Editor) ? Map_Editor->nUndone : 0;
+        u32 waypoints = (Waypoint_Editor) ? Waypoint_Editor->nWaypointsActive : 0;
+
+        stbsp_snprintf(buff, sizeof(buff), "Pixels1D: %u", Number_of_Pixels_1D);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Original contigs: %u  Editable contigs: %u",
+            Number_of_Original_Contigs,
+            contigCount);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Edits: %u  Undone: %u", edits, undone);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Waypoints: %u", waypoints);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+    }
+
+    nk_end(ctx);
+}
 
 #ifdef Internal
 global_function
@@ -9198,10 +9533,19 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     {
                         u32 start = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
                         u32 end = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-                        u32 loc = (mods & GLFW_MOD_SHIFT) ? end : start;
-                        if (BreakMap((int)loc, 1))
+                        u32 didBreak = 0;
+                        if (BreakMap((int)start, 1))
                         {
-                            AddBreakEdit(loc);
+                            AddBreakEdit(start);
+                            didBreak = 1;
+                        }
+                        if (end != start && BreakMap((int)end, 1))
+                        {
+                            AddBreakEdit(end);
+                            didBreak = 1;
+                        }
+                        if (didBreak)
+                        {
                             UpdateContigsFromMapState();
                             UpdateScaffolds();
                             Redisplay = 1;
@@ -9451,6 +9795,16 @@ void
 ErrorCallback(s32 error, const char *desc)
 {
     (void)error;
+    if (desc)
+    {
+        stbsp_snprintf(GLFW_Error_Message, sizeof(GLFW_Error_Message), "%s", desc);
+        GLFW_Error_Has = 1;
+    }
+    else
+    {
+        GLFW_Error_Message[0] = '\0';
+        GLFW_Error_Has = 0;
+    }
     fprintf(stderr, "Error: %s\n", desc);
 }
 
@@ -12039,6 +12393,7 @@ MainArgs
 
     Stuck_Problem_Check_Debug
 
+    InstallCrashHandler();
     glfwSetErrorCallback(ErrorCallback);
     if (!glfwInit()) 
     {      
@@ -12181,19 +12536,92 @@ MainArgs
     
     while (!glfwWindowShouldClose(window)) 
     {
+        UpdateCrashReportSnapshot();
         if (Redisplay) 
         {
-            Render();
+            SetErrorContext(error_context_visual_rendering, "Render");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                Render();
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_visual_rendering, "Render", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_visual_rendering, "Render", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
+
             glfwSwapBuffers(window);
             Redisplay = 0;
-            if (currFileName) SaveState(headerHash);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
             Stuck_Problem_Check_Debug
         }
 
         if (Loading) 
         {
-            if (currFileName) SaveState(headerHash);
-            LoadFile((const char *)currFile, Loading_Arena, (char **)&currFileName, &headerHash);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
+
+            SetErrorContext(error_context_backend_integration, "LoadFile");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                LoadFile((const char *)currFile, Loading_Arena, (char **)&currFileName, &headerHash);
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_backend_integration, "LoadFile", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_backend_integration, "LoadFile", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
             if (currFileName)
             {
                 glfwSetWindowTitle(window, (const char *)currFileName);
@@ -12206,16 +12634,86 @@ MainArgs
 
         if (auto_sort_state)
         {
-            if (currFileName) SaveState(headerHash);
-            auto_sort_func((char*)currFileName);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
+            SetErrorContext(error_context_backend_integration, "auto_sort_func");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                auto_sort_func((char*)currFileName);
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_backend_integration, "auto_sort_func", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_backend_integration, "auto_sort_func", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
             auto_sort_state = 0;
             Redisplay = 1;
         }
 
         if (auto_cut_state)
         {   
-            if (currFileName) SaveState(headerHash);
-            auto_cut_func((char*)currFileName, Loading_Arena);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
+            SetErrorContext(error_context_backend_integration, "auto_cut_func");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                auto_cut_func((char*)currFileName, Loading_Arena);
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_backend_integration, "auto_cut_func", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_backend_integration, "auto_cut_func", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
             auto_cut_state = 0;
             Redisplay = 1;
         }
@@ -12322,10 +12820,15 @@ MainArgs
                         showLoadStateScreen = nk_button_label(NK_Context, "Load State");
                         showSaveAGPScreen = nk_button_label(NK_Context, "Generate AGP");
                         showLoadAGPScreen = nk_button_label(NK_Context, "Load AGP");
-                        if (nk_button_label(NK_Context, "Clear Cache")) showClearCacheScreen = 1; // used to clear cache for current opened sample
                     }
                     showUserProfileScreen = nk_button_label(NK_Context, "User Profile");
                     showAboutScreen = nk_button_label(NK_Context, "About");
+                    if (currFileName)
+                    {
+                        nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
+                        if (nk_button_label(NK_Context, "Clear Cache")) showClearCacheScreen = 1; // used to clear cache for current opened sample
+                        if (nk_button_label(NK_Context, "Debug Report")) Debug_UI_On = !Debug_UI_On;
+                    }
 
                     // AI & Pixel Sort button 
                     struct nk_color sort_button_normal = nk_rgb(153, 50, 204); 
@@ -13523,6 +14026,7 @@ MainArgs
                 }
 
                 AboutWindowRun(NK_Context, (u32)showAboutScreen);
+                DebugWindowRun(NK_Context);
 
                 u08 state;
                 if ((state = UserProfileEditorRun("User profile editor", &saveBrowser, NK_Context, (u32)showUserProfileScreen, 1)))
