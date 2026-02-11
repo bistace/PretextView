@@ -23,6 +23,7 @@ SOFTWARE.
 
 
 #include "utilsPretextView.h"
+#include <sstream>
 
 
 u32
@@ -254,12 +255,76 @@ std::string getResourcesPath() {
 
 
 
+static std::string Last_Error_Message;
+static error_context Current_Error_Context = error_context_none;
+static std::string Current_Error_Where;
+static error_context Last_Error_Context = error_context_none;
+static std::string Last_Error_Where;
+
+const char *GetLastErrorMessage()
+{
+    return Last_Error_Message.c_str();
+}
+
+const char *GetErrorContextName(error_context ctx)
+{
+    switch (ctx)
+    {
+        case error_context_visual_rendering:
+            return "visual rendering";
+        case error_context_state_management:
+            return "state management";
+        case error_context_backend_integration:
+            return "backend integration";
+        case error_context_none:
+        default:
+            return "none";
+    }
+}
+
+void SetErrorContext(error_context ctx, const char *where)
+{
+    Current_Error_Context = ctx;
+    if (where)
+    {
+        Current_Error_Where = where;
+    }
+    else
+    {
+        Current_Error_Where.clear();
+    }
+}
+
+const char *GetCurrentErrorContextName()
+{
+    return GetErrorContextName(Current_Error_Context);
+}
+
+const char *GetCurrentErrorContextWhere()
+{
+    return Current_Error_Where.c_str();
+}
+
+const char *GetLastErrorContextName()
+{
+    return GetErrorContextName(Last_Error_Context);
+}
+
+const char *GetLastErrorContextWhere()
+{
+    return Last_Error_Where.c_str();
+}
+
 void my_code_position_handler(const char* file, int line, const char* message) {
     if (message)
     {
-        std::cerr << "File: " << file << " Line: " << line ;
-        if (message) std::cerr << " Message: " << message;
-        std::cerr << std::endl;
+        std::ostringstream oss;
+        oss << "File: " << file << " Line: " << line;
+        if (message) oss << " Message: " << message;
+        Last_Error_Message = oss.str();
+        Last_Error_Context = Current_Error_Context;
+        Last_Error_Where = Current_Error_Where;
+        std::cerr << Last_Error_Message << std::endl;
     }
     return ;
 }
@@ -268,9 +333,13 @@ void my_code_position_handler(const char* file, int line, const char* message) {
 void my_code_position_handler(const char* file, int line, std::string message) {
     if (message.size()>0)
     {
-        std::cerr << "File: " << file << " Line: " << line ;
-        if (message.size()>0) std::cerr << " Message: " << message;
-        std::cerr << std::endl;
+        std::ostringstream oss;
+        oss << "File: " << file << " Line: " << line;
+        if (message.size()>0) oss << " Message: " << message;
+        Last_Error_Message = oss.str();
+        Last_Error_Context = Current_Error_Context;
+        Last_Error_Where = Current_Error_Where;
+        std::cerr << Last_Error_Message << std::endl;
     }
     return ;
 }

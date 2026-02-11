@@ -1,8 +1,5 @@
 /*
 Copyright (c) 2024,2025 Genome Research Ltd.
-Copyright (c) 2021 Ed Harry, Wellcome Sanger Institute
-Copyright (c) 2024 Shaoheng Guan, Wellcome Sanger Institute
-Copyright (c) 2025 Yumi Sims, Wellcome Sanger Institute
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,6 +22,7 @@ SOFTWARE.
 @author: Ed Harry, Wellcome Sanger Institute
 @author: Shaoheng Guan, Wellcome Sanger Institute
 @author: Yumi Sims, yy5@sanger.ac.uk, Wellcome Sanger Institute
+@author: Chenxi Zhou, cz3@sanger.ac.uk, Wellcome Sanger Institute
 */
 
 
@@ -82,6 +80,22 @@ SOFTWARE.
 #define STB_SPRINTF_IMPLEMENTATION
 #include "stb_sprintf.h"
 #pragma clang diagnostic pop
+
+#include <signal.h>
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#define PV_OPEN _open
+#define PV_WRITE _write
+#define PV_CLOSE _close
+#define PV_OPEN_FLAGS (O_WRONLY | O_CREAT | O_TRUNC | O_BINARY)
+#else
+#include <unistd.h>
+#define PV_OPEN open
+#define PV_WRITE write
+#define PV_CLOSE close
+#define PV_OPEN_FLAGS (O_WRONLY | O_CREAT | O_TRUNC)
+#endif
 
 #pragma clang diagnostic push
 #pragma GCC diagnostic ignored "-Wreserved-id-macro"
@@ -697,6 +711,38 @@ u32
 UI_On = 0;
 
 global_variable
+u08
+Debug_UI_On = 0;
+
+global_variable
+u08
+GLFW_Error_Has = 0;
+
+global_variable
+char
+GLFW_Error_Message[512] = {0};
+
+global_variable
+char
+Crash_Report_Path[256] = "pretextview_crash_report.txt";
+
+global_variable
+char
+Crash_Report_Snapshot[2048] = {0};
+
+global_variable
+error_context
+Last_Exception_Context = error_context_none;
+
+global_variable
+char
+Last_Exception_Where[128] = {0};
+
+global_variable
+char
+Last_Exception_Message[512] = {0};
+
+global_variable
 global_mode
 Global_Mode = mode_normal;
 
@@ -782,6 +828,151 @@ global_variable original_contig *Original_Contigs;
 global_variable
 u32
 Number_of_Original_Contigs;
+
+global_function
+const char *
+GetGlobalModeName(global_mode mode)
+{
+    switch (mode)
+    {
+        case mode_normal:
+            return "normal";
+        case mode_edit:
+            return "edit";
+        case mode_waypoint_edit:
+            return "waypoint";
+        case mode_scaff_edit:
+            return "scaffold";
+        case mode_meta_edit:
+            return "metadata";
+        case mode_extension:
+            return "extension";
+        case mode_select_sort_area:
+            return "select_sort_area";
+        default:
+            return "unknown";
+    }
+}
+
+global_function
+void
+CaptureException(error_context ctx, const char *where, const char *message)
+{
+    Last_Exception_Context = ctx;
+    if (where)
+    {
+        stbsp_snprintf(Last_Exception_Where, sizeof(Last_Exception_Where), "%s", where);
+    }
+    else
+    {
+        Last_Exception_Where[0] = '\0';
+    }
+    if (message)
+    {
+        stbsp_snprintf(Last_Exception_Message, sizeof(Last_Exception_Message), "%s", message);
+    }
+    else
+    {
+        Last_Exception_Message[0] = '\0';
+    }
+}
+
+global_function
+void
+UpdateCrashReportSnapshot()
+{
+    const char *currentContext = GetCurrentErrorContextName();
+    const char *currentWhere = GetCurrentErrorContextWhere();
+    const char *lastError = GetLastErrorMessage();
+    const char *lastErrorCtx = GetLastErrorContextName();
+    const char *lastErrorWhere = GetLastErrorContextWhere();
+    const char *excCtx = GetErrorContextName(Last_Exception_Context);
+
+    stbsp_snprintf(
+        Crash_Report_Snapshot,
+        sizeof(Crash_Report_Snapshot),
+        "Current context: %s%s%s\n"
+        "Last error: %s%s%s%s%s\n"
+        "Last exception: %s%s%s%s%s\n"
+        "GLFW error: %s\n",
+        currentContext ? currentContext : "none",
+        (currentWhere && currentWhere[0]) ? " (" : "",
+        (currentWhere && currentWhere[0]) ? currentWhere : "",
+        (lastError && lastError[0]) ? lastError : "<none>",
+        (lastError && lastError[0]) ? " (" : "",
+        (lastError && lastError[0]) ? lastErrorCtx : "",
+        (lastError && lastError[0] && lastErrorWhere && lastErrorWhere[0]) ? ", " : "",
+        (lastError && lastError[0] && lastErrorWhere && lastErrorWhere[0]) ? lastErrorWhere : "",
+        (lastError && lastError[0]) ? ")" : "",
+        (Last_Exception_Message[0]) ? Last_Exception_Message : "<none>",
+        (Last_Exception_Message[0]) ? " (" : "",
+        (Last_Exception_Message[0]) ? excCtx : "",
+        (Last_Exception_Message[0] && Last_Exception_Where[0]) ? ", " : "",
+        (Last_Exception_Message[0] && Last_Exception_Where[0]) ? Last_Exception_Where : "",
+        (Last_Exception_Message[0]) ? ")" : "",
+        (GLFW_Error_Has && GLFW_Error_Message[0]) ? GLFW_Error_Message : "<none>");
+}
+
+global_function
+void
+CrashSignalHandler(int sig)
+{
+    const char *sigName = "signal";
+    switch (sig)
+    {
+        case SIGSEGV: sigName = "SIGSEGV"; break;
+        case SIGABRT: sigName = "SIGABRT"; break;
+#ifdef SIGBUS
+        case SIGBUS: sigName = "SIGBUS"; break;
+#endif
+        case SIGILL: sigName = "SIGILL"; break;
+        case SIGFPE: sigName = "SIGFPE"; break;
+    }
+
+    int fd = PV_OPEN(Crash_Report_Path, PV_OPEN_FLAGS, 0644);
+    if (fd >= 0)
+    {
+        const char *header = "PretextView crash report\n";
+        const char *label = "Signal: ";
+        const char *newline = "\n";
+
+        auto write_all = [](int outFd, const char *s) {
+            if (!s) return;
+            size_t n = 0;
+            while (s[n]) { ++n; }
+            if (n) PV_WRITE(outFd, s, n);
+        };
+
+        write_all(fd, header);
+        write_all(fd, label);
+        write_all(fd, sigName);
+        write_all(fd, newline);
+        write_all(fd, Crash_Report_Snapshot);
+        PV_CLOSE(fd);
+    }
+
+    _exit(128 + sig);
+}
+
+global_function
+void
+InstallCrashHandler()
+{
+    signal(SIGSEGV, CrashSignalHandler);
+    signal(SIGABRT, CrashSignalHandler);
+#ifdef SIGBUS
+    signal(SIGBUS, CrashSignalHandler);
+#endif
+    signal(SIGILL, CrashSignalHandler);
+    signal(SIGFPE, CrashSignalHandler);
+}
+
+global_function
+u32
+GetOriginalContigBaseId(u32 originalContigId)
+{
+    return Number_of_Original_Contigs ? (originalContigId % Number_of_Original_Contigs) : originalContigId;
+}
 
 // All the "clickable" contigs which are mapped to a pixel on screen and are
 // therefore editable.  The maximum number of editable contigs is determined
@@ -1743,6 +1934,7 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
     u32 lastScaffID = Map_State->scaffIds[0];       // The number of the first scaffold
     u32 scaffId = lastScaffID ? 1 : 0;              // 
     u32 lastId_original_contig = Map_State->originalContigIds[0];   // Contig ID of the first pixel
+    u32 lastId_original_contig_base = GetOriginalContigBaseId(lastId_original_contig);
     u32 lastCoord = Map_State->contigRelCoords[0];  // Local coordinates of the first pixel
     u32 contigPtr = 0;
     u32 length = 0;
@@ -1773,6 +1965,7 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
 
         // The original contig ID of the pixel.
         u32 original_contig_id = Map_State->originalContigIds[pixelIdx];
+        u32 original_contig_id_base = GetOriginalContigBaseId(original_contig_id);
 
         // Local coordinates of a pixel
         u32 coord = Map_State->contigRelCoords[pixelIdx];
@@ -1785,17 +1978,17 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
 
             // update Original_Contigs: contigMapPixels, recording the
             // mid-point of the fragment.
-            Original_Contigs[lastId_original_contig]
-                .contigMapPixels[Original_Contigs[lastId_original_contig].nContigs] = pixelIdx - 1 - (length >> 1);
+            Original_Contigs[lastId_original_contig_base]
+                .contigMapPixels[Original_Contigs[lastId_original_contig_base].nContigs] = pixelIdx - 1 - (length >> 1);
 
             // update Original_Contigs: nContigs
-            Original_Contigs[lastId_original_contig].nContigs++;
+            Original_Contigs[lastId_original_contig_base].nContigs++;
 
             // Get the pointer to the previous contig
             contig *last_cont = Contigs->contigs_arr + contigPtr;
 
             // Update the ID of this clip.
-            last_cont->originalContigId = lastId_original_contig;
+            last_cont->originalContigId = lastId_original_contig_base;
 
             // Update length
             last_cont->length = length;
@@ -1863,6 +2056,7 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
 
         // Update the ID of the previous pixel.
         lastId_original_contig = original_contig_id;
+        lastId_original_contig_base = original_contig_id_base;
 
         // Update the local coordinates of the previous pixel
         lastCoord = coord;
@@ -1871,12 +2065,13 @@ UpdateContigsFromMapState()  // Reading updates contigs from the state of the ma
     if (contigPtr < Contigs->numberOfContigs)
     // Update the fragment information of the last contig.
     {
-        (Original_Contigs + lastId_original_contig)
-            ->contigMapPixels[(Original_Contigs + lastId_original_contig)->nContigs++] = pixelIdx - 1 - (length >> 1);
+        u32 lastId_original_contig_base = GetOriginalContigBaseId(lastId_original_contig);
+        (Original_Contigs + lastId_original_contig_base)
+            ->contigMapPixels[(Original_Contigs + lastId_original_contig_base)->nContigs++] = pixelIdx - 1 - (length >> 1);
 
         ++length;
         contig *cont = Contigs->contigs_arr + contigPtr++;
-        cont->originalContigId = lastId_original_contig;
+        cont->originalContigId = lastId_original_contig_base;
         cont->length = length;
         cont->startCoord = startCoord;
         cont->metaDataFlags = Map_State->metaDataFlags + pixelIdx - 1;
@@ -2027,6 +2222,9 @@ map_edit
     }
 };
 
+global_variable
+const s32 Break_Edit_Delta = std::numeric_limits<s32>::min();
+
 struct
 waypoint;
 
@@ -2149,6 +2347,14 @@ void
 MoveWayPoints(map_edit *edit, u32 undo = 0);
 
 global_function
+u08
+BreakMap(const int& loc, const u32& ignore_len);
+
+global_function
+void
+UnbreakMap(const int& loc);
+
+global_function
 void
 AddMapEdit(s32 delta, pointui finalPixels, u32 invert)
 {
@@ -2168,6 +2374,25 @@ AddMapEdit(s32 delta, pointui finalPixels, u32 invert)
     edit->delta = (s32)delta;
     edit->finalPix1 = pix1;
     edit->finalPix2 = pix2;
+}
+
+global_function
+void
+AddBreakEdit(u32 loc)
+{
+    ++Map_Editor->nEdits;
+    Map_Editor->nUndone = 0;
+
+    map_edit *edit = Map_Editor->edits + Map_Editor->editStackPtr++;
+
+    if (Map_Editor->editStackPtr == Edits_Stack_Size)
+    {
+        Map_Editor->editStackPtr = 0;
+    }
+
+    edit->delta = Break_Edit_Delta;
+    edit->finalPix1 = loc;
+    edit->finalPix2 = loc;
 }
 
 global_function
@@ -2192,6 +2417,13 @@ UndoMapEdit()
         }
 
         map_edit *edit = Map_Editor->edits + (--Map_Editor->editStackPtr);
+
+        if (edit->delta == Break_Edit_Delta)
+        {
+            UnbreakMap((int)edit->finalPix1);
+            UpdateScaffolds();
+            return;
+        }
 
         if (edit->finalPix1 > edit->finalPix2)
         {
@@ -2221,6 +2453,14 @@ RedoMapEdit()
         if (Map_Editor->editStackPtr == Edits_Stack_Size)
         {
             Map_Editor->editStackPtr = 0;
+        }
+
+        if (edit->delta == Break_Edit_Delta)
+        {
+            BreakMap((int)edit->finalPix1, 1);
+            UpdateContigsFromMapState();
+            UpdateScaffolds();
+            return;
         }
 
         u32 start = my_Min(edit->finalPix1, edit->finalPix2);
@@ -3185,6 +3425,159 @@ File_Loaded = 0;
 global_variable
 nk_color
 Theme_Colour;
+
+global_function
+void
+DebugWindowRun(struct nk_context *ctx)
+{
+    if (!Debug_UI_On)
+    {
+        return;
+    }
+
+    const char *name = "Debug Report";
+    struct nk_window *window = nk_window_find(ctx, name);
+    if (window && (window->flags & NK_WINDOW_HIDDEN))
+    {
+        window->flags &= ~(nk_flags)NK_WINDOW_HIDDEN;
+    }
+
+    if (nk_begin(
+            ctx,
+            name,
+            nk_rect(Screen_Scale.x * 10, Screen_Scale.y * 620, Screen_Scale.x * 420, Screen_Scale.y * 360),
+            NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_TITLE | NK_WINDOW_SCALABLE))
+    {
+        char buff[256];
+        nk_layout_row_dynamic(ctx, Screen_Scale.y * 20.0f, 1);
+
+        stbsp_snprintf(buff, sizeof(buff), "Mode: %s", GetGlobalModeName(Global_Mode));
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "UI_On: %u  Redisplay: %u", UI_On, Redisplay);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Loading: %u  File_Loaded: %u", Loading, File_Loaded);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        const char *currentContext = GetCurrentErrorContextName();
+        const char *currentWhere = GetCurrentErrorContextWhere();
+        if (currentWhere && currentWhere[0])
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Current context: %s (%s)", currentContext, currentWhere);
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Current context: %s", currentContext);
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        const char *lastError = GetLastErrorMessage();
+        const char *lastErrorCtx = GetLastErrorContextName();
+        const char *lastErrorWhere = GetLastErrorContextWhere();
+        if (lastError && lastError[0])
+        {
+            if (lastErrorWhere && lastErrorWhere[0])
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last error: %s (%s, %s)", lastError, lastErrorCtx, lastErrorWhere);
+            }
+            else
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last error: %s (%s)", lastError, lastErrorCtx);
+            }
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Last error: <none>");
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        if (Last_Exception_Message[0])
+        {
+            const char *excCtx = GetErrorContextName(Last_Exception_Context);
+            if (Last_Exception_Where[0])
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last exception: %s (%s, %s)", Last_Exception_Message, excCtx, Last_Exception_Where);
+            }
+            else
+            {
+                stbsp_snprintf(buff, sizeof(buff), "Last exception: %s (%s)", Last_Exception_Message, excCtx);
+            }
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "Last exception: <none>");
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        if (GLFW_Error_Has && GLFW_Error_Message[0])
+        {
+            stbsp_snprintf(buff, sizeof(buff), "GLFW error: %s", GLFW_Error_Message);
+        }
+        else
+        {
+            stbsp_snprintf(buff, sizeof(buff), "GLFW error: <none>");
+        }
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Crash report file: %s", Crash_Report_Path);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "AutoSort: %u  AutoCut: %u", auto_sort_state, auto_cut_state);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Edit: editing=%u selecting=%u snap=%u scaffSelect=%u",
+            Edit_Pixels.editing,
+            Edit_Pixels.selecting,
+            Edit_Pixels.snap,
+            Edit_Pixels.scaffSelecting);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Pixels: x=%u y=%u",
+            Edit_Pixels.pixels.x,
+            Edit_Pixels.pixels.y);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Camera: x=%.3f y=%.3f z=%.3f",
+            Camera_Position.x,
+            Camera_Position.y,
+            Camera_Position.z);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        u32 contigCount = (File_Loaded && Contigs) ? Contigs->numberOfContigs : 0;
+        u32 edits = (Map_Editor) ? Map_Editor->nEdits : 0;
+        u32 undone = (Map_Editor) ? Map_Editor->nUndone : 0;
+        u32 waypoints = (Waypoint_Editor) ? Waypoint_Editor->nWaypointsActive : 0;
+
+        stbsp_snprintf(buff, sizeof(buff), "Pixels1D: %u", Number_of_Pixels_1D);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(
+            buff,
+            sizeof(buff),
+            "Original contigs: %u  Editable contigs: %u",
+            Number_of_Original_Contigs,
+            contigCount);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Edits: %u  Undone: %u", edits, undone);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+
+        stbsp_snprintf(buff, sizeof(buff), "Waypoints: %u", waypoints);
+        nk_label(ctx, buff, NK_TEXT_LEFT);
+    }
+
+    nk_end(ctx);
+}
 
 #ifdef Internal
 global_function
@@ -4936,8 +5329,8 @@ Render() {
             textBoxHeight *= (3.0f + (f32)nExtra);
             textBoxHeight += (2.0f + (f32)nExtra);
 
-            u32 id1 = Map_State->originalContigIds[Tool_Tip_Move.pixels.x];
-            u32 id2 = Map_State->originalContigIds[Tool_Tip_Move.pixels.y];
+            u32 id1 = GetOriginalContigBaseId(Map_State->originalContigIds[Tool_Tip_Move.pixels.x]);
+            u32 id2 = GetOriginalContigBaseId(Map_State->originalContigIds[Tool_Tip_Move.pixels.y]);
             u32 coord1 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.x];
             u32 coord2 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.y];
             
@@ -5199,7 +5592,7 @@ Render() {
                     pix1 = pix1 ? pix1 - 1 : (pix2 < (Number_of_Pixels_1D - 1) ? pix2 + 1 : pix2);
                 }
 
-                original_contig *cont = Original_Contigs + Map_State->originalContigIds[pix1];
+                original_contig *cont = Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[pix1]);
 
                 u32 nPixels = Number_of_Pixels_1D;
                 f64 bpPerPixel = (f64)Total_Genome_Length / (f64)nPixels;
@@ -5218,7 +5611,7 @@ Render() {
                 if (!line1Done)
                 {
                     f64 bpEnd = bpPerPixel * (f64)Map_State->contigRelCoords[pix2];
-                    original_contig *cont2 = Original_Contigs + Map_State->originalContigIds[pix2];
+                    original_contig *cont2 = Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[pix2]);
                     stbsp_snprintf(line1, 64, "%s[%$.2fbp] to %s[%$.2fbp]", cont->name, bpStart, cont2->name, bpEnd);
                     if (Edit_Pixels.editing)
                     {
@@ -7562,17 +7955,17 @@ RearrangeMap(       // NOTE: VERY IMPORTANT
         
 */
 global_function
-void 
+u08
 BreakMap(
     const int& loc, 
     const u32& ignore_len  // Contigs whose length from the cut point to the beginning
                            // or end is less than ignore_len will not be cut.
 )
 {   
-    if (loc >= Number_of_Pixels_1D)
+    if (loc < 0 || loc >= (int)Number_of_Pixels_1D)
     {
         char buff[512];
-        snprintf(buff, sizeof(buff), "[Pixel Cut] Error: loc (%d) should be smaller than number of pixels (%d)", loc, Number_of_Pixels_1D);
+        snprintf(buff, sizeof(buff), "[Pixel Cut] Error: loc (%d) should be within [0, %d)", loc, Number_of_Pixels_1D);
         MY_CHECK(buff);
         assert(0);
     }
@@ -7616,22 +8009,22 @@ BreakMap(
             l_len,  ignore_len,
             r_len,  ignore_len, 
             loc);
-        return;
+        return 0;
     } 
 
     // cut the contig by amending the original Contig Ids.
     for (u32 tmp = loc + 1; tmp <= ptr_right; tmp++) // cut_loc is included as left
     {   
-        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Contigs->numberOfContigs))
+        if (Map_State->originalContigIds[tmp] > (std::numeric_limits<u32>::max() - Number_of_Original_Contigs))
         {
-            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the number of mapped contigs ({}), file {}, line {}\n", tmp,
-            Contigs->numberOfContigs,
-            (u64)Map_State->originalContigIds[tmp] + Contigs->numberOfContigs,
+            fmt::print("[Pixel Cut] originalContigIds[{}] + {} = {} is greater than the max number of contigs ({}), file {}, line {}\n", tmp,
+            Number_of_Original_Contigs,
+            (u64)Map_State->originalContigIds[tmp] + Number_of_Original_Contigs,
             std::numeric_limits<u32>::max(), 
             __FILE__, __LINE__);
             assert(0);
         }
-        Map_State->originalContigIds[tmp] += Contigs->numberOfContigs;
+        Map_State->originalContigIds[tmp] += Number_of_Original_Contigs;
     }
 
     fmt::print(
@@ -7643,8 +8036,54 @@ BreakMap(
         inversed ? "(is)" : "(isn\'t)", 
         loc );
 
-    return ; 
+    return 1; 
 
+}
+
+global_function
+void
+UnbreakMap(
+    const int& loc
+)
+{
+    if (loc < 0 || (loc + 1) >= (int)Number_of_Pixels_1D)
+    {
+        return;
+    }
+
+    u32 left_id = Map_State->originalContigIds[loc];
+    u32 right_id = Map_State->originalContigIds[loc + 1];
+
+    if ((left_id % Number_of_Original_Contigs) != (right_id % Number_of_Original_Contigs))
+    {
+        return;
+    }
+    if (left_id == right_id)
+    {
+        return;
+    }
+
+    u32 right_contig_id = Map_State->contigIds[loc + 1];
+    s32 ptr_right = loc + 1;
+    u08 inversed = IsContigInverted(right_contig_id);
+    while (
+        ptr_right < (int)Number_of_Pixels_1D - 1 &&
+        Map_State->contigIds[ptr_right] == right_contig_id &&
+        (Map_State->contigRelCoords[ptr_right] == Map_State->contigRelCoords[ptr_right + 1] + (inversed ? +1 : -1)))
+    {
+        ++ptr_right;
+    };
+
+    for (u32 tmp = (u32)(loc + 1); tmp <= (u32)ptr_right; tmp++)
+    {
+        if (Map_State->originalContigIds[tmp] >= Number_of_Original_Contigs)
+        {
+            Map_State->originalContigIds[tmp] -= Number_of_Original_Contigs;
+        }
+    }
+
+    UpdateContigsFromMapState();
+    Redisplay = 1;
 }
 
 
@@ -9092,6 +9531,32 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_V:
+                    if (Edit_Mode && action != GLFW_RELEASE)
+                    {
+                        u32 start = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+                        u32 end = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+                        u32 didBreak = 0;
+                        if (BreakMap((int)start, 1))
+                        {
+                            AddBreakEdit(start);
+                            didBreak = 1;
+                        }
+                        if (end != start && BreakMap((int)end, 1))
+                        {
+                            AddBreakEdit(end);
+                            didBreak = 1;
+                        }
+                        if (didBreak)
+                        {
+                            UpdateContigsFromMapState();
+                            UpdateScaffolds();
+                            Redisplay = 1;
+                        }
+                    }
+                    else
+                    {
+                        keyPressed = 0;
+                    }
                     break;
 
                 case GLFW_KEY_W:
@@ -9332,6 +9797,16 @@ void
 ErrorCallback(s32 error, const char *desc)
 {
     (void)error;
+    if (desc)
+    {
+        stbsp_snprintf(GLFW_Error_Message, sizeof(GLFW_Error_Message), "%s", desc);
+        GLFW_Error_Has = 1;
+    }
+    else
+    {
+        GLFW_Error_Message[0] = '\0';
+        GLFW_Error_Has = 0;
+    }
     fprintf(stderr, "Error: %s\n", desc);
 }
 
@@ -10020,9 +10495,19 @@ SaveState(
                 }
                 
                 map_edit *edit = Map_Editor->edits + editStackPtr;
-                u32 x = (u32)((s32)edit->finalPix1 - edit->delta);
-                u32 y = (u32)((s32)edit->finalPix2 - edit->delta);
+                u32 x = 0;
+                u32 y = 0;
                 s32 d = edit->delta;
+                if (edit->delta == Break_Edit_Delta)
+                {
+                    x = edit->finalPix1;
+                    y = edit->finalPix2;
+                }
+                else
+                {
+                    x = (u32)((s32)edit->finalPix1 - edit->delta);
+                    y = (u32)((s32)edit->finalPix2 - edit->delta);
+                }
 
                 *fileWriter++ = ((u08 *)&x)[0];
                 *fileWriter++ = ((u08 *)&x)[1];
@@ -10037,7 +10522,7 @@ SaveState(
                 *fileWriter++ = ((u08 *)&d)[2];
                 *fileWriter++ = ((u08 *)&d)[3];
 
-                if (edit->finalPix1 > edit->finalPix2)
+                if (edit->delta != Break_Edit_Delta && edit->finalPix1 > edit->finalPix2)
                 {
                     u32 byte = (index + 1) >> 3;
                     u32 bit = (index + 1) & 7;
@@ -10590,6 +11075,17 @@ LoadState(u64 headerHash, char *path)
                         ((u08 *)&d)[1] = *fileContents++;
                         ((u08 *)&d)[2] = *fileContents++;
                         ((u08 *)&d)[3] = *fileContents++;
+
+                        if (d == Break_Edit_Delta)
+                        {
+                            if (x < Number_of_Pixels_1D && BreakMap((int)x, 1))
+                            {
+                                AddBreakEdit(x);
+                                UpdateContigsFromMapState();
+                                UpdateScaffolds();
+                            }
+                            continue;
+                        }
 
                         u32 byte = (index + 1) >> 3; // find the byte, 1 byte saves 8 invert_flag of edits
                         u32 bit = (index + 1) & 7; // find the bit in the byte
@@ -11554,9 +12050,9 @@ CopyEditsToClipBoard(GLFWwindow *window)
 
             u32 oldFrom = Map_State->contigRelCoords[start];
             u32 oldTo = Map_State->contigRelCoords[end];
-            u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-            u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-            u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+            u32 *name1 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[start]))->name;
+            u32 *name2 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[end]))->name;
+            u32 *newName = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[to]))->name;
 
             bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n",
                     index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -11617,9 +12113,9 @@ SaveEditsToFile(char *path, u08 overwrite)
 
                 u32 oldFrom = Map_State->contigRelCoords[start];
                 u32 oldTo = Map_State->contigRelCoords[end];
-                u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-                u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-                u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+                u32 *name1 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[start]))->name;
+                u32 *name2 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[end]))->name;
+                u32 *newName = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[to]))->name;
 
                 bufferPtr += (u32)stbsp_snprintf((char *)buffer + bufferPtr, (s32)(bufferSize - bufferPtr), "Edit %d:\n       %s[%$.2fbp] to %s[%$.2fbp]\n%s\n       %s[%$.2fbp]\n\n",
                         index + 1, (char *)name1, (f64)oldFrom * bpPerPixel, (char *)name2, (f64)oldTo * bpPerPixel,
@@ -11899,6 +12395,7 @@ MainArgs
 
     Stuck_Problem_Check_Debug
 
+    InstallCrashHandler();
     glfwSetErrorCallback(ErrorCallback);
     if (!glfwInit()) 
     {      
@@ -12041,19 +12538,92 @@ MainArgs
     
     while (!glfwWindowShouldClose(window)) 
     {
+        UpdateCrashReportSnapshot();
         if (Redisplay) 
         {
-            Render();
+            SetErrorContext(error_context_visual_rendering, "Render");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                Render();
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_visual_rendering, "Render", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_visual_rendering, "Render", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
+
             glfwSwapBuffers(window);
             Redisplay = 0;
-            if (currFileName) SaveState(headerHash);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
             Stuck_Problem_Check_Debug
         }
 
         if (Loading) 
         {
-            if (currFileName) SaveState(headerHash);
-            LoadFile((const char *)currFile, Loading_Arena, (char **)&currFileName, &headerHash);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
+
+            SetErrorContext(error_context_backend_integration, "LoadFile");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                LoadFile((const char *)currFile, Loading_Arena, (char **)&currFileName, &headerHash);
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_backend_integration, "LoadFile", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_backend_integration, "LoadFile", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
             if (currFileName)
             {
                 glfwSetWindowTitle(window, (const char *)currFileName);
@@ -12066,16 +12636,86 @@ MainArgs
 
         if (auto_sort_state)
         {
-            if (currFileName) SaveState(headerHash);
-            auto_sort_func((char*)currFileName);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
+            SetErrorContext(error_context_backend_integration, "auto_sort_func");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                auto_sort_func((char*)currFileName);
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_backend_integration, "auto_sort_func", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_backend_integration, "auto_sort_func", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
             auto_sort_state = 0;
             Redisplay = 1;
         }
 
         if (auto_cut_state)
         {   
-            if (currFileName) SaveState(headerHash);
-            auto_cut_func((char*)currFileName, Loading_Arena);
+            if (currFileName)
+            {
+                SetErrorContext(error_context_state_management, "SaveState");
+                UpdateCrashReportSnapshot();
+                try
+                {
+                    SaveState(headerHash);
+                }
+                catch (const std::exception &e)
+                {
+                    CaptureException(error_context_state_management, "SaveState", e.what());
+                    UpdateCrashReportSnapshot();
+                }
+                catch (...)
+                {
+                    CaptureException(error_context_state_management, "SaveState", "unknown exception");
+                    UpdateCrashReportSnapshot();
+                }
+                SetErrorContext(error_context_none, 0);
+            }
+            SetErrorContext(error_context_backend_integration, "auto_cut_func");
+            UpdateCrashReportSnapshot();
+            try
+            {
+                auto_cut_func((char*)currFileName, Loading_Arena);
+            }
+            catch (const std::exception &e)
+            {
+                CaptureException(error_context_backend_integration, "auto_cut_func", e.what());
+                UpdateCrashReportSnapshot();
+            }
+            catch (...)
+            {
+                CaptureException(error_context_backend_integration, "auto_cut_func", "unknown exception");
+                UpdateCrashReportSnapshot();
+            }
+            SetErrorContext(error_context_none, 0);
             auto_cut_state = 0;
             Redisplay = 1;
         }
@@ -12182,10 +12822,15 @@ MainArgs
                         showLoadStateScreen = nk_button_label(NK_Context, "Load State");
                         showSaveAGPScreen = nk_button_label(NK_Context, "Generate AGP");
                         showLoadAGPScreen = nk_button_label(NK_Context, "Load AGP");
-                        if (nk_button_label(NK_Context, "Clear Cache")) showClearCacheScreen = 1; // used to clear cache for current opened sample
                     }
                     showUserProfileScreen = nk_button_label(NK_Context, "User Profile");
                     showAboutScreen = nk_button_label(NK_Context, "About");
+                    if (currFileName)
+                    {
+                        nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
+                        if (nk_button_label(NK_Context, "Clear Cache")) showClearCacheScreen = 1; // used to clear cache for current opened sample
+                        if (nk_button_label(NK_Context, "Debug Report")) Debug_UI_On = !Debug_UI_On;
+                    }
 
                     // AI & Pixel Sort button 
                     struct nk_color sort_button_normal = nk_rgb(153, 50, 204); 
@@ -12994,9 +13639,9 @@ MainArgs
 
                                     u32 oldFrom = Map_State->contigRelCoords[start];
                                     u32 oldTo = Map_State->contigRelCoords[end];
-                                    u32 *name1 = (Original_Contigs + Map_State->originalContigIds[start])->name;
-                                    u32 *name2 = (Original_Contigs + Map_State->originalContigIds[end])->name;
-                                    u32 *newName = (Original_Contigs + Map_State->originalContigIds[to])->name;
+                                    u32 *name1 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[start]))->name;
+                                    u32 *name2 = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[end]))->name;
+                                    u32 *newName = (Original_Contigs + GetOriginalContigBaseId(Map_State->originalContigIds[to]))->name;
                                     
                                     stbsp_snprintf((char *)buff, sizeof(buff), "Edit %d:", index + 1);
                                     nk_label(NK_Context, (const char *)buff, NK_TEXT_LEFT);
@@ -13383,6 +14028,7 @@ MainArgs
                 }
 
                 AboutWindowRun(NK_Context, (u32)showAboutScreen);
+                DebugWindowRun(NK_Context);
 
                 u08 state;
                 if ((state = UserProfileEditorRun("User profile editor", &saveBrowser, NK_Context, (u32)showUserProfileScreen, 1)))

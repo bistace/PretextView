@@ -220,15 +220,32 @@ std::string getResourcesPath();
 #endif
 
 
+enum error_context
+{
+    error_context_none = 0,
+    error_context_visual_rendering,
+    error_context_state_management,
+    error_context_backend_integration,
+};
+
+void SetErrorContext(error_context ctx, const char *where);
+const char *GetErrorContextName(error_context ctx);
+const char *GetCurrentErrorContextName();
+const char *GetCurrentErrorContextWhere();
+const char *GetLastErrorContextName();
+const char *GetLastErrorContextWhere();
+
 void my_code_position_handler(const char* file, int line, const char* message=nullptr);
 
 #define MY_CHECK(MESSAGE) my_code_position_handler(__FILE__, __LINE__, MESSAGE)
+
+const char *GetLastErrorMessage();
 
 
 f64 GetTime(); // return current time in seconds
 
 
-/* 计算数组的 95% 分位数, 最大的 0.05 */
+/* Calculate the 95th percentile (top 5%) of the array. */
 template <typename T>
 T percentile_cal(T* data, u32 size, f32 percentile=0.95)
 {   
