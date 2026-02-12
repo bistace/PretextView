@@ -5579,7 +5579,7 @@ Render() {
                 glDrawRangeElements(GL_TRIANGLES, 0, 3, 6, GL_UNSIGNED_SHORT, NULL);
             }
 
-            // Draw Tab-selected contigs
+            // Draw Tab-selected contigs (full cross pattern)
             if (Edit_Pixels.tabSelecting && !Edit_Pixels.tabSelectedRanges.empty() && !Edit_Pixels.editing)
             {
                 f32 tabColor[4] = {1.0f, 0.65f, 0.0f, 0.3f};
@@ -5591,6 +5591,47 @@ Render() {
                     f32 tMin = (f32)(((f64)((2 * range.y) + 1)) / ((f64)(2 * nPix))) - 0.5f;
                     f32 tMax = (f32)(((f64)((2 * range.x) + 1)) / ((f64)(2 * nPix))) - 0.5f;
 
+                    // upper vertical part
+                    vert[0].x = ModelXToScreen(tMin); vert[0].y = ModelYToScreen(0.5f);
+                    vert[1].x = ModelXToScreen(tMin); vert[1].y = ModelYToScreen(-tMin);
+                    vert[2].x = ModelXToScreen(tMax); vert[2].y = ModelYToScreen(-tMin);
+                    vert[3].x = ModelXToScreen(tMax); vert[3].y = ModelYToScreen(0.5f);
+                    glBindBuffer(GL_ARRAY_BUFFER, Tab_Select_VBO);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, 4 * sizeof(vertex), vert);
+                    glBindVertexArray(Tab_Select_VAO);
+                    glDrawRangeElements(GL_TRIANGLES, 0, 3, 6, GL_UNSIGNED_SHORT, NULL);
+
+                    // left horizontal part
+                    vert[0].x = ModelXToScreen(-0.5f); vert[0].y = ModelYToScreen(-tMin);
+                    vert[1].x = ModelXToScreen(-0.5f); vert[1].y = ModelYToScreen(-tMax);
+                    vert[2].x = ModelXToScreen(tMin);  vert[2].y = ModelYToScreen(-tMax);
+                    vert[3].x = ModelXToScreen(tMin);  vert[3].y = ModelYToScreen(-tMin);
+                    glBindBuffer(GL_ARRAY_BUFFER, Tab_Select_VBO);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, 4 * sizeof(vertex), vert);
+                    glBindVertexArray(Tab_Select_VAO);
+                    glDrawRangeElements(GL_TRIANGLES, 0, 3, 6, GL_UNSIGNED_SHORT, NULL);
+
+                    // lower vertical part
+                    vert[0].x = ModelXToScreen(tMin); vert[0].y = ModelYToScreen(-tMax);
+                    vert[1].x = ModelXToScreen(tMin); vert[1].y = ModelYToScreen(-0.5f);
+                    vert[2].x = ModelXToScreen(tMax); vert[2].y = ModelYToScreen(-0.5f);
+                    vert[3].x = ModelXToScreen(tMax); vert[3].y = ModelYToScreen(-tMax);
+                    glBindBuffer(GL_ARRAY_BUFFER, Tab_Select_VBO);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, 4 * sizeof(vertex), vert);
+                    glBindVertexArray(Tab_Select_VAO);
+                    glDrawRangeElements(GL_TRIANGLES, 0, 3, 6, GL_UNSIGNED_SHORT, NULL);
+
+                    // right horizontal part
+                    vert[0].x = ModelXToScreen(tMax);  vert[0].y = ModelYToScreen(-tMin);
+                    vert[1].x = ModelXToScreen(tMax);  vert[1].y = ModelYToScreen(-tMax);
+                    vert[2].x = ModelXToScreen(0.5f);  vert[2].y = ModelYToScreen(-tMax);
+                    vert[3].x = ModelXToScreen(0.5f);  vert[3].y = ModelYToScreen(-tMin);
+                    glBindBuffer(GL_ARRAY_BUFFER, Tab_Select_VBO);
+                    glBufferSubData(GL_ARRAY_BUFFER, 0, 4 * sizeof(vertex), vert);
+                    glBindVertexArray(Tab_Select_VAO);
+                    glDrawRangeElements(GL_TRIANGLES, 0, 3, 6, GL_UNSIGNED_SHORT, NULL);
+
+                    // center part
                     vert[0].x = ModelXToScreen(tMin); vert[0].y = ModelYToScreen(-tMin);
                     vert[1].x = ModelXToScreen(tMin); vert[1].y = ModelYToScreen(-tMax);
                     vert[2].x = ModelXToScreen(tMax); vert[2].y = ModelYToScreen(-tMax);
