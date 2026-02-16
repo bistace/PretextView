@@ -9550,14 +9550,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
 
                 case GLFW_KEY_N:
-                    if (Edit_Mode)
-                    {
-                        CopyHighlightedRegionToClipboard(window);
-                    }
-                    else
-                    {
-                        Contig_Name_Labels->on = !Contig_Name_Labels->on;
-                    }
+                    Contig_Name_Labels->on = !Contig_Name_Labels->on;
                     break;
 
                 case GLFW_KEY_O:
@@ -12203,40 +12196,6 @@ TextInput(GLFWwindow* window, u32 codepoint)
 
 global_function
 void
-CopyHighlightedRegionToClipboard(GLFWwindow *window)
-{
-    if (!File_Loaded || !Map_State || !Original_Contigs || !Number_of_Pixels_1D) return;
-
-    u32 pixelStart, pixelEnd;
-    if (Edit_Pixels.editing)
-    {
-        pixelStart = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-        pixelEnd = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-    }
-    else if (Edit_Pixels.selecting)
-    {
-        pixelStart = my_Min(Edit_Pixels.selectPixels.x, Edit_Pixels.selectPixels.y);
-        pixelEnd = my_Max(Edit_Pixels.selectPixels.x, Edit_Pixels.selectPixels.y);
-    }
-    else return;
-
-    pixelStart = my_Min(pixelStart, Number_of_Pixels_1D - 1);
-    pixelEnd = my_Min(pixelEnd, Number_of_Pixels_1D - 1);
-
-    f64 bpPerPixel = (f64)Total_Genome_Length / (f64)Number_of_Pixels_1D;
-    f64 startMbp = ((f64)pixelStart * bpPerPixel) / 1e6;
-    f64 endMbp = ((f64)(pixelEnd + 1) * bpPerPixel) / 1e6;
-
-    u32 origId = GetOriginalContigBaseId(Map_State->originalContigIds[pixelStart]);
-    const char *name = (const char *)(Original_Contigs + origId)->name;
-
-    char buffer[256];
-    stbsp_snprintf(buffer, sizeof(buffer), "%s %.2f Mbp - %.2f Mbp", name, startMbp, endMbp);
-    glfwSetClipboardString(window, buffer);
-}
-
-global_function
-void
 CopyEditsToClipBoard(GLFWwindow *window)
 {
     u32 nEdits = my_Min(Edits_Stack_Size, Map_Editor->nEdits);
@@ -13249,7 +13208,7 @@ MainArgs
                                 auto_curation_state.clear(); // click the button will run sort globally
                                 nk_popup_close(NK_Context);
                             }
-                            // close button 
+                            // 关闭按钮 
                             if (nk_button_label(NK_Context, "Close")) {
                                 auto_sort_button = 0;
                                 auto_curation_state.set_buf();
