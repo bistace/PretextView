@@ -3,6 +3,7 @@
 #define FRAG_FOR_COMPRESS_H
 
 #include <iostream>
+#include <numeric>
 #include "utilsPretextView.h"
 #include "genomeData.h"
 #include "auto_curation_state.h"
@@ -148,6 +149,7 @@ struct Frag4compress {
             length[i] = Contigs->contigs_arr[frag_id[i]].length;
             total_length += length[i];
             metaDataFlags[i] = (Contigs->contigs_arr[frag_id[i]].metaDataFlags == nullptr)?0:*(Contigs->contigs_arr[frag_id[i]].metaDataFlags);
+            startCoord[i] = 0;
             while (global_frag_index < frag_id[i])
             {   
                 if (global_frag_index >= Contigs->numberOfContigs)
@@ -198,4 +200,4 @@ private:
     }
 };
 
-#endif // FRAG4COMPRESS_H
+#endif // FRAG_FOR_COMPRESS_H

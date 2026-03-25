@@ -8402,8 +8402,45 @@ void AutoCurationFromFragsOrder(
         std::vector<s32> full_predicted_order(num_frags);
         std::iota(full_predicted_order.begin(), full_predicted_order.end(), 1);
         std::vector<u32> frags_id_to_sort = select_area->get_to_sort_frags_id(Contigs);
-        for (u32 i=0; i < frags_id_to_sort.size(); i++) 
-            full_predicted_order[frags_id_to_sort[i]] = (predicted_order[i]>0?1:-1) * (frags_id_to_sort.front() + std::abs(predicted_order[i]));
+        // Map_State->contigIds / selected_frag_ids use 0-based fragment indices [0, numberOfContigs-1].
+        // If max id in the list equals numberOfContigs, treat as 1-based (legacy or mixed state).
+        u32 max_sel_id = 0;
+        for (u32 x : frags_id_to_sort)
+            if (x > max_sel_id)
+                max_sel_id = x;
+        const bool frag_ids_zero_based = (max_sel_id < contigs_->numberOfContigs);
+
+        // Local sort order uses indices 1..n; map local index k to global contig id frags_id_to_sort[k-1].
+        // Do NOT use front()+abs(local): that assumes selected contigs are contiguous in id space (29..29+n-1).
+        for (u32 i = 0; i < frags_id_to_sort.size(); i++)
+        {
+            const u32 loc = (u32)std::abs(predicted_order[i]); // 1-based local fragment index
+            if (loc < 1 || loc > frags_id_to_sort.size())
+            {
+                fmt::print(
+                    stderr,
+                    "[AutoCurationFromFragsOrder] invalid local sort index {} (must be 1..{}), at {}\n",
+                    loc,
+                    frags_id_to_sort.size(),
+                    i);
+                assert(0);
+            }
+            const u32 g_raw = frags_id_to_sort[loc - 1];
+            const s32 global_1based = frag_ids_zero_based
+                ? (s32)(g_raw + 1)
+                : (s32)g_raw; // already 1-based; matches current_order[].first
+            const u32 key0 = frag_ids_zero_based ? frags_id_to_sort[i] : (frags_id_to_sort[i] - 1);
+            if (key0 >= num_frags)
+            {
+                fmt::print(
+                    stderr,
+                    "[AutoCurationFromFragsOrder] fragment id {} out of range for full_predicted_order[0..{})\n",
+                    frags_id_to_sort[i],
+                    num_frags);
+                assert(0);
+            }
+            full_predicted_order[key0] = (predicted_order[i] > 0 ? 1 : -1) * global_1based;
+        }
         predicted_order = full_predicted_order;
     }
     for (s32 i = 0; i < num_frags; ++i) current_order[i] = {i+1, contigs_->contigs_arr[i].length}; // start from 1
@@ -8460,8 +8497,17 @@ void AutoCurationFromFragsOrder(
             {
                 if (tmp_i >= num_frags)
                 {   
-                    char buff[256];
-                    snprintf(buff, sizeof(buff), "Error: contig %d not found in the current order.\n", current_order[i].first);
+                    char buff[512];
+                    snprintf(
+                        buff,
+                        sizeof(buff),
+                        "Error: could not find contig id %d (from predicted_order[%u]) in current_order after scanning all %u slots — "
+                        "often caused by duplicate fragment IDs in the selected region (same genomic contig listed twice). "
+                        "At this slot, current_order[i].first was %d.\n",
+                        (int)std::abs(predicted_order[i]),
+                        (unsigned)i,
+                        (unsigned)num_frags,
+                        (int)current_order[i].first);
                     MY_CHECK(buff);
                     assert(0);
                 }

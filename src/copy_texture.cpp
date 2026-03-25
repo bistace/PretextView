@@ -916,6 +916,20 @@ void TexturesArray4AI::cal_compressed_hic(
         );
         assert(0);
     }
+
+    for (u32 fi = 0; fi < frags->num; ++fi)
+    {
+        if (frags->length[fi] < 1)
+        {
+            fmt::print(
+                stderr,
+                "[compressed HiC] contig with invalid size: row index {} in sort list -> contig id {}, length {} pixels (expected >= 1)\n",
+                fi,
+                frags->frag_id[fi],
+                frags->length[fi]);
+        }
+    }
+
     // clean the memory of compressed_hic_mx
     if (compressed_hic)
     {
@@ -955,6 +969,13 @@ void TexturesArray4AI::cal_compressed_hic(
         {   
             for (u32 j = i+1; j < frags->num; ++j)
             {   
+                if (frags->length[i] < 1 || frags->length[j] < 1)
+                {
+                    mass_centres[i * frags->num + j].row = mass_centres[i * frags->num + j].col = 0.5f;
+                    mass_centres[j * frags->num + i].row = mass_centres[j * frags->num + i].col = 0.5f;
+                    ++cnt;
+                    continue;
+                }
                 cal_mass_centre(
                     frags->startCoord[i],
                     frags->startCoord[j],
@@ -979,6 +1000,11 @@ void TexturesArray4AI::cal_compressed_hic(
     {
         for (u32 j = i; j < frags->num; j++)
         {   
+            if (frags->length[i] < 1 || frags->length[j] < 1)
+            {
+                (*compressed_hic)(i, j, 4) = (*compressed_hic)(j, i, 4) = 0.f;
+                continue;
+            }
             (*compressed_hic)(i, j, 4) = (*compressed_hic)(j, i, 4) = cal_block_mean(
                 frags->startCoord[i], 
                 frags->startCoord[j], 
@@ -1004,6 +1030,17 @@ void TexturesArray4AI::cal_compressed_hic(
     {
         for (u32 j = i+1; j < frags->num; j++)
         {   
+            if (frags->length[i] < 1 || frags->length[j] < 1)
+            {
+                for (u32 channel = 0; channel < 4; channel++)
+                    (*compressed_hic)(i, j, channel) = (*compressed_hic)(j, i, Switch_Channel_Symetric[channel]) = 0.f;
+                if (num_interaction_to_cal > 100 && ++cnt % (num_interaction_to_cal / 100)==0)
+                {
+                    printf("\rCalculating compressed_hic %.2f%%", (f32)(cnt) / (f32)num_interaction_to_cal * 100.0f);
+                    fflush(stdout);
+                }
+                continue;
+            }
             this->get_interaction_score(
                     frags->startCoord[i], 
                     frags->startCoord[j], 
@@ -1403,10 +1440,7 @@ Sum_and_Number TexturesArray4AI::get_interaction_block_diag_sum_number(
 f32 TexturesArray4AI::cal_block_mean(const u32 &offset_row, const u32 &offset_column, const u32 &num_row, const u32 &num_column) const
 {   
     if (num_row < 1 || num_column < 1)
-    {
-        std::cerr << "The number of row or column is less than 1" << std::endl;
-        assert(0);
-    }
+        return 0.f;
     u64 sum = 0;
     for (u32 i = offset_row; i < offset_row + num_row; i++)
     {

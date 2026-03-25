@@ -137,6 +137,12 @@ void FragSortTool::sort_according_likelihood_dfs(
     const f32 threshold, 
     const Frag4compress* frags) const 
 {
+    fmt::print(
+        stderr,
+        "[sort_according_likelihood_dfs] frags->num={} likelihood_table.get_num_frags()={} frags_order.get_num_frags()={}\n",
+        frags ? frags->num : 0u,
+        likelihood_table.get_num_frags(),
+        frags_order.get_num_frags());
 
     // sort the fragments according to length
 
