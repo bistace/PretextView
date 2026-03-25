@@ -979,11 +979,18 @@ void TexturesArray4AI::cal_compressed_hic(
     {
         for (u32 j = i; j < frags->num; j++)
         {   
-            (*compressed_hic)(i, j, 4) = (*compressed_hic)(j, i, 4) = cal_block_mean(
-                frags->startCoord[i], 
-                frags->startCoord[j], 
-                frags->length[i], 
-                frags->length[j])/255.f;
+            if (frags->length[i] < 1u || frags->length[j] < 1u)
+            {
+                (*compressed_hic)(i, j, 4) = (*compressed_hic)(j, i, 4) = 0.f;
+            }
+            else
+            {
+                (*compressed_hic)(i, j, 4) = (*compressed_hic)(j, i, 4) = cal_block_mean(
+                    frags->startCoord[i], 
+                    frags->startCoord[j], 
+                    frags->length[i], 
+                    frags->length[j])/255.f;
+            }
         }
     }
 
@@ -1066,6 +1073,12 @@ void TexturesArray4AI::get_interaction_score(
     Values_on_Channel& buffer_values_on_channel)
 {
     check_copied_from_buffer();
+
+    if (num_row < 1 || num_column < 1)
+    {
+        buffer_values_on_channel.initilize();
+        return;
+    }
 
     std::function<f32(f32, int)> score_cal = [&norm_diag_mean](const f32& mean, const int& i)->f32
         {   
@@ -1402,11 +1415,9 @@ Sum_and_Number TexturesArray4AI::get_interaction_block_diag_sum_number(
 
 f32 TexturesArray4AI::cal_block_mean(const u32 &offset_row, const u32 &offset_column, const u32 &num_row, const u32 &num_column) const
 {   
+    // Zero-length contigs: empty block (callers should skip when possible to avoid log noise).
     if (num_row < 1 || num_column < 1)
-    {
-        std::cerr << "The number of row or column is less than 1" << std::endl;
-        assert(0);
-    }
+        return 0.f;
     u64 sum = 0;
     for (u32 i = offset_row; i < offset_row + num_row; i++)
     {
@@ -1452,8 +1463,11 @@ void TexturesArray4AI::cal_mass_centre(const u32 &offset_row, const u32 &offset_
 {   
     if (num_row < 1 || num_column < 1)
     {
-        std::cerr << "The number of row or column is less than 1" << std::endl;
-        assert(0);
+        std::cerr << "[cal_mass_centre] skipping empty block: num_row=" << num_row
+                  << " num_column=" << num_column << " at offset (" << offset_row << "," << offset_column << ")\n";
+        mass_centre->row = 0.5f;
+        mass_centre->col = 0.5f;
+        return;
     }
     if (num_row == 1 && num_column == 1)
     {

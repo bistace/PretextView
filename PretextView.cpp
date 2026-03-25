@@ -8399,12 +8399,32 @@ void AutoCurationFromFragsOrder(
     std::vector<s32> predicted_order = frags_order_->get_order_without_chromosomeInfor(); // start from 1
     if (using_select_area)
     {
+        // FragsOrder uses local indices 1..N (sign = orientation). Map each global slot in the
+        // selection (frags_id_to_sort[k] = map position / 0-based contig id) to the actual global
+        // contig id: frags_id_to_sort[abs(predicted_order[k]) - 1]. Do not use front()+abs(...).
         std::vector<s32> full_predicted_order(num_frags);
         std::iota(full_predicted_order.begin(), full_predicted_order.end(), 1);
         std::vector<u32> frags_id_to_sort = select_area->get_to_sort_frags_id(Contigs);
-        for (u32 i=0; i < frags_id_to_sort.size(); i++) 
-            full_predicted_order[frags_id_to_sort[i]] = (predicted_order[i]>0?1:-1) * (frags_id_to_sort.front() + std::abs(predicted_order[i]));
-        predicted_order = full_predicted_order;
+        const u32 n_sort = (u32)frags_id_to_sort.size();
+        for (u32 k = 0; k < n_sort; k++)
+        {
+            const u32 global_pos = frags_id_to_sort[k];
+            const s32 local_signed = predicted_order[k];
+            const u32 local_1based = (u32)std::abs(local_signed);
+            if (local_1based < 1u || local_1based > n_sort)
+            {
+                fmt::print(
+                    stderr,
+                    "[AutoCurationFromFragsOrder] invalid local fragment index {} (expected 1..{})\n",
+                    local_1based,
+                    n_sort);
+                assert(0);
+            }
+            const u32 src0 = frags_id_to_sort[local_1based - 1u];
+            const s32 global_1based = (s32)(src0 + 1u);
+            full_predicted_order[global_pos] = (local_signed > 0 ? 1 : -1) * global_1based;
+        }
+        predicted_order = std::move(full_predicted_order);
     }
     for (s32 i = 0; i < num_frags; ++i) current_order[i] = {i+1, contigs_->contigs_arr[i].length}; // start from 1
     auto move_current_order_element = [&current_order, &num_frags](u32 from, u32 to)
@@ -8456,12 +8476,12 @@ void AutoCurationFromFragsOrder(
 
             // find the pixel range of the contig to move
             u32 pixelFrom = 0, tmp_i = 0; // tmp_i is the index of the current contig, which is going to be processed
-            while (std::abs(predicted_order[i])!=std::abs(current_order[tmp_i].first))
+                while (std::abs(predicted_order[i])!=std::abs(current_order[tmp_i].first))
             {
                 if (tmp_i >= num_frags)
                 {   
                     char buff[256];
-                    snprintf(buff, sizeof(buff), "Error: contig %d not found in the current order.\n", current_order[i].first);
+                    snprintf(buff, sizeof(buff), "Error: contig %d not found in the current order.\n", (int)std::abs(predicted_order[i]));
                     MY_CHECK(buff);
                     assert(0);
                 }
@@ -8650,6 +8670,10 @@ auto_sort_func(char* currFileName)
         false  // show_flag
     ); 
     restore_settings_after_copy(original_color_control_points);
+
+    // Rebuild contigIds from originalContigIds + contigRelCoords so selection matches the current map
+    // (RearrangeMap updates those buffers but not contigIds until this runs).
+    UpdateContigsFromMapState();
 
     // check if select the area for sorting
     SelectArea selected_area;
