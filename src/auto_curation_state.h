@@ -1,8 +1,6 @@
 #ifndef AUTO_CURATION_STATE_H 
 #define AUTO_CURATION_STATE_H
 
-#include <algorithm>
-#include <unordered_map>
 #include "utilsPretextView.h"
 #include "showWindowData.h"
 #include "genomeData.h"
@@ -354,31 +352,6 @@ public:
         }
         // set the select_area to valid
         if (!select_area.selected_frag_ids.empty()) select_area.select_flag = 1;
-
-        if (!select_area.selected_frag_ids.empty())
-        {
-            std::unordered_map<s32, u32> runs_per_contig_id;
-            for (s32 id : select_area.selected_frag_ids)
-                ++runs_per_contig_id[id];
-            std::vector<s32> dup_ids;
-            dup_ids.reserve(runs_per_contig_id.size());
-            for (const auto& kv : runs_per_contig_id)
-                if (kv.second > 1)
-                    dup_ids.push_back(kv.first);
-            if (!dup_ids.empty())
-            {
-                std::sort(dup_ids.begin(), dup_ids.end());
-                fmt::print(
-                    stderr,
-                    "[Pixel Sort] Selected region: {} contiguous runs along pixels, {} unique contig ids. "
-                    "Some contig ids appear in multiple runs (the pixel walk crosses the same boundaries repeatedly). "
-                    "Local sort apply may fail or behave incorrectly.\n",
-                    select_area.selected_frag_ids.size(),
-                    runs_per_contig_id.size());
-                for (s32 id : dup_ids)
-                    fmt::print(stderr, "[Pixel Sort]   contig id {} appears {} times in the run list\n", id, runs_per_contig_id[id]);
-            }
-        }
 
         return;
     }
