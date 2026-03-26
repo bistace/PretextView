@@ -35,7 +35,7 @@ else # windows
 endif
 
 # lib of deflate
-# 通过 static_library() 函数创建了静态库 libdeflate，
+# Created static library libdeflate using the static_library() function.
 libdeflate =  static_library('deflate', 'subprojects/libdeflate/lib/deflate_compress.c', 'subprojects/libdeflate/lib/deflate_decompress.c', 'subprojects/libdeflate/lib/utils.c', 
     c_args : flags, 
     link_with : [
