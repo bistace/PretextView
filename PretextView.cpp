@@ -12387,39 +12387,50 @@ CopyHighlightedRegionToClipboard(GLFWwindow *window)
     pixelStart = my_Min(pixelStart, Number_of_Pixels_1D - 1);
     pixelEnd = my_Min(pixelEnd, Number_of_Pixels_1D - 1);
 
-    f64 bpPerPixel = (f64)Total_Genome_Length / (f64)Number_of_Pixels_1D;
+    /* Map pixels are uniform in bp along the whole map; contigRelCoords are local indices along each
+       fragment. Convert selection to bp along the fragment using startCoord and inversion (not rel * global bp). */
+    f64 bp_per_map_pixel = (f64)Total_Genome_Length / (f64)Number_of_Pixels_1D;
 
-    // Build output using local (contig-level) coordinates --yy5
     char buffer[1024];
     u32 bufPtr = 0;
-    u32 lastBaseId = GetOriginalContigBaseId(Map_State->originalContigIds[pixelStart]);
-    u32 minCoord = Map_State->contigRelCoords[pixelStart];
-    u32 maxCoord = Map_State->contigRelCoords[pixelStart];
 
-    // Iterate through each pixel and update the buffer --yy5
-    for (u32 p = pixelStart + 1; p <= pixelEnd + 1; p++)
+    for (u32 p = pixelStart; p <= pixelEnd; )
     {
-        u32 baseId = (p <= pixelEnd) ? GetOriginalContigBaseId(Map_State->originalContigIds[p]) : (u32)-1;
-        u32 coord = (p <= pixelEnd) ? Map_State->contigRelCoords[p] : 0;
-
-        if (p > pixelEnd || baseId != lastBaseId)
+        u32 fragId = Map_State->contigIds[p];
+        u32 baseId = GetOriginalContigBaseId(Map_State->originalContigIds[p]);
+        u32 minRel = Map_State->contigRelCoords[p];
+        u32 maxRel = Map_State->contigRelCoords[p];
+        u32 q = p + 1;
+        while (q <= pixelEnd && Map_State->contigIds[q] == fragId)
         {
-            const char *name = (const char *)(Original_Contigs + lastBaseId)->name;
-            u32 lo = my_Min(minCoord, maxCoord);
-            u32 hi = my_Max(minCoord, maxCoord);
-            f64 startMbp = ((f64)lo * bpPerPixel) / 1e6;
-            f64 endMbp = ((f64)(hi + 1) * bpPerPixel) / 1e6;
-            bufPtr += (u32)stbsp_snprintf(buffer + bufPtr, (s32)(sizeof(buffer) - bufPtr), "%s%s %.2f Mbp - %.2f Mbp", bufPtr ? "; " : "", name, startMbp, endMbp);
-            if (p > pixelEnd) break;
-            lastBaseId = baseId;
-            minCoord = coord;
-            maxCoord = coord;
+            u32 r = Map_State->contigRelCoords[q];
+            if (r < minRel) minRel = r;
+            if (r > maxRel) maxRel = r;
+            ++q;
+        }
+        p = q;
+
+        if (fragId >= Contigs->numberOfContigs) continue;
+
+        contig *c = Contigs->contigs_arr + fragId;
+        f64 startMbp;
+        f64 endMbp;
+        if (!IsContigInverted(fragId))
+        {
+            startMbp = ((f64)(minRel - c->startCoord) * bp_per_map_pixel) / 1e6;
+            endMbp = ((f64)(maxRel - c->startCoord + 1u) * bp_per_map_pixel) / 1e6;
         }
         else
         {
-            if (coord < minCoord) minCoord = coord;
-            if (coord > maxCoord) maxCoord = coord;
+            startMbp = ((f64)(c->startCoord - maxRel) * bp_per_map_pixel) / 1e6;
+            endMbp = ((f64)(c->startCoord - minRel + 1u) * bp_per_map_pixel) / 1e6;
         }
+        if (startMbp < 0.0) startMbp = 0.0;
+        if (endMbp < 0.0) endMbp = 0.0;
+
+        const char *name = (const char *)(Original_Contigs + baseId)->name;
+        bufPtr += (u32)stbsp_snprintf(buffer + bufPtr, (s32)(sizeof(buffer) - bufPtr), "%s%s %.2f Mbp - %.2f Mbp",
+            bufPtr ? "; " : "", name, startMbp, endMbp);
     }
     glfwSetClipboardString(window, buffer);
     size_t len = strlen(buffer);
@@ -13175,7 +13186,23 @@ MainArgs
                 }
             }
 
+            /* State-based keys for Nuklear text fields (Clipboard Editor, etc.): navigation + Ctrl/Cmd+C/V/X. */
+            nk_input_key(NK_Context, NK_KEY_DEL, glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS);
+            nk_input_key(NK_Context, NK_KEY_ENTER, glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS);
+            nk_input_key(NK_Context, NK_KEY_TAB, glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS);
+            nk_input_key(NK_Context, NK_KEY_BACKSPACE, glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS);
+            nk_input_key(NK_Context, NK_KEY_LEFT, glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS);
+            nk_input_key(NK_Context, NK_KEY_RIGHT, glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS);
+            nk_input_key(NK_Context, NK_KEY_UP, glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS);
+            nk_input_key(NK_Context, NK_KEY_DOWN, glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS);
             nk_input_key(NK_Context, NK_KEY_SHIFT, glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
+            {
+                const int mod = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS
+                    || glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS);
+                nk_input_key(NK_Context, NK_KEY_COPY, mod && glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS);
+                nk_input_key(NK_Context, NK_KEY_PASTE, mod && glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS);
+                nk_input_key(NK_Context, NK_KEY_CUT, mod && glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS);
+            }
             
             nk_input_scroll(NK_Context, NK_Scroll);
             NK_Scroll.x = 0;
