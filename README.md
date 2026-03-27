@@ -19,7 +19,7 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 - `W`: enter the Waypoint edit mode.
 - `J`: window jump to the diagonal line without changing the zoom-level, which is useful for selecting the correct place for a small fragment.
 - `L`: toggle the Grid Line.
-- `T`: toggle the Tooltip.
+- `T`: toggle the Tooltip. When it is on, the tooltip window shows the contig names and positions for the row and column under the cursor, the scaffold id, **meta tag** names that apply at that locus (from Meta Tag mode), and values for enabled extension tracks (e.g. coverage) when those are turned on.
 - `I`: toggle the ID bar.
 - `3`: toggle the 3p_telomere extension.
 - `5`: toggle the 5p_telomere extension.
@@ -34,10 +34,12 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 - `Load State`: select a file to load the state.
 - `Generate AGP`: save the curated genome into the `.agp` format.
 - `Clear Cache`: Clear all edits and revert to the pre-curation state. **Please note this action is irreversible.**
+- `Clipboard Editor`: opens a text buffer tied to the system clipboard. Use **Ctrl+C / Ctrl+V / Ctrl+X** to copy, paste, and cut (**Cmd+C / Cmd+V / Cmd+X** on macOS). **Save as** opens a file dialog to save the buffer (default filename suffix `_clipboard.txt`).
 
 ## Edit mode (`E`)
 - `left mouse button`: Click and drag with the left mouse button to select an are to zoom to. 
 - Pickup a region of a contig with the left mouse button, pickup a whole contig with the middle mouse button or spacebar. Place a region with the left mouse button. Invert a selected region with the middle mouse button or spacebar. Undo the last edit with the 'q' key. Exit edit mode with the 'e' key. Use the GUI to see a list of completed edits.
+- `P`: copy the **highlighted** map range to the system clipboard. The text lists each map fragment in the selection with the contig name and a **local** span in megabases along that fragment (not a single genome-wide coordinate). If nothing is actively selected, the current edit cursor range is used. 
 - `V`: break (split) the contig at the start of the current selection.
 - `Shift` + `V`: break (split) the contig at the end of the current selection.
 
