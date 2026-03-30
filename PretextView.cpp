@@ -5975,7 +5975,7 @@ Render() {
                         (char *)"Middle Click / Spacebar: pickup whole sequence or (hold Shift): scaffold",
                         (char *)"Middle Click / Spacebar (while editing): invert sequence",
                         (char *)"P: copy highlight to clipboard",
-                        (char *)"V: break at selection start, Shift+V: break at end"
+                        (char *)"V: break at selection start"
                     };
 
                     textBoxHeight = (f32)helpTexts.size() * (lh + 1.0f) - 1.0f;
@@ -9876,10 +9876,9 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                 case GLFW_KEY_V:
                     if (Edit_Mode && action != GLFW_RELEASE)
                     {
-                        // One breakpoint per keypress: V = at start of selection (min pixel), Shift+V = at end (max). yy5
+                        // One breakpoint per keypress: V at start of selection (min pixel).
                         u32 start = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-                        u32 end = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-                        u32 loc = (mods & GLFW_MOD_SHIFT) ? end : start;
+                        u32 loc = start;
                         if (BreakMap((int)loc, 1))
                         {
                             AddBreakEdit(loc);
