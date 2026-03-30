@@ -1951,7 +1951,7 @@ MetaTagsEditorRun(struct nk_context *ctx, u08 show)
                 {
                     if (!strlen((const char *)Meta_Data->tags[index]))
                     {
-                        ForLoop2(Number_of_Pixels_1D) Map_State->metaDataFlags[index2] &= ~(1 << index);
+                        ForLoop2(Number_of_Pixels_1D) Map_State->metaDataFlags[index2] &= ~(1ULL << index);
                         u32 nextActive = index;
                         ForLoop2((ArrayCount(Meta_Data->tags) - 1))
                         {
@@ -5973,7 +5973,9 @@ Render() {
                         (char *)"Left Click: pickup, place",
                         (char *)"S: toggle snap mode",
                         (char *)"Middle Click / Spacebar: pickup whole sequence or (hold Shift): scaffold",
-                        (char *)"Middle Click / Spacebar (while editing): invert sequence"
+                        (char *)"Middle Click / Spacebar (while editing): invert sequence",
+                        (char *)"P: copy highlight to clipboard",
+                        (char *)"V: break at selection start"
                     };
 
                     textBoxHeight = (f32)helpTexts.size() * (lh + 1.0f) - 1.0f;
@@ -9874,21 +9876,12 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                 case GLFW_KEY_V:
                     if (Edit_Mode && action != GLFW_RELEASE)
                     {
+                        // One breakpoint per keypress: V at start of selection (min pixel).
                         u32 start = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-                        u32 end = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-                        u32 didBreak = 0;
-                        if (BreakMap((int)start, 1))
+                        u32 loc = start;
+                        if (BreakMap((int)loc, 1))
                         {
-                            AddBreakEdit(start);
-                            didBreak = 1;
-                        }
-                        if (end != start && BreakMap((int)end, 1))
-                        {
-                            AddBreakEdit(end);
-                            didBreak = 1;
-                        }
-                        if (didBreak)
-                        {
+                            AddBreakEdit(loc);
                             UpdateContigsFromMapState();
                             UpdateScaffolds();
                             Redisplay = 1;

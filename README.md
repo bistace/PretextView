@@ -39,9 +39,8 @@ PretextView is a desktop application for viewing pretext contact maps.<br/>
 ## Edit mode (`E`)
 - `left mouse button`: Click and drag with the left mouse button to select an are to zoom to. 
 - Pickup a region of a contig with the left mouse button, pickup a whole contig with the middle mouse button or spacebar. Place a region with the left mouse button. Invert a selected region with the middle mouse button or spacebar. Undo the last edit with the 'q' key. Exit edit mode with the 'e' key. Use the GUI to see a list of completed edits.
-- `P`: copy the **highlighted** map range to the system clipboard. The text lists each map fragment in the selection with the contig name and a **local** span in megabases along that fragment (not a single genome-wide coordinate). If nothing is actively selected, the current edit cursor range is used. 
+- `P`: copy the **highlighted** map range to the system clipboard. The text lists each map fragment in the selection with the contig name and a **local** span in megabases along that fragment (not a single genome-wide coordinate).
 - `V`: break (split) the contig at the start of the current selection.
-- `Shift` + `V`: break (split) the contig at the end of the current selection.
 
 ## Waypoint mode (`W`)
 - `left mouse button`: place a waypoint.
