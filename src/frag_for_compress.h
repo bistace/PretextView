@@ -102,6 +102,7 @@ struct Frag4compress {
             }
         }
         length[0] = Contigs->contigs_arr[frag_id[0]].length;
+        warn_if_zero_length_contig(Contigs, frag_id[0], 0);
         metaDataFlags[0] = (Contigs->contigs_arr[frag_id[0]].metaDataFlags == nullptr)?
             0 : *(Contigs->contigs_arr[frag_id[0]].metaDataFlags);
         total_length = length[0];
@@ -112,6 +113,7 @@ struct Frag4compress {
             inversed[i] = false; // currently, this is not used
             startCoord[i] = startCoord[i-1] + length[i-1];
             length[i] = Contigs->contigs_arr[frag_id[i]].length;
+            warn_if_zero_length_contig(Contigs, frag_id[i], i);
             metaDataFlags[i] = (Contigs->contigs_arr[frag_id[i]].metaDataFlags == nullptr)?
                 0 : *(Contigs->contigs_arr[frag_id[i]].metaDataFlags);
             total_length += length[i];
@@ -146,6 +148,7 @@ struct Frag4compress {
             frag_id[i] = selected_frag_ids_tmp[i];
             inversed[i] = false;
             length[i] = Contigs->contigs_arr[frag_id[i]].length;
+            warn_if_zero_length_contig(Contigs, frag_id[i], (u32)i);
             total_length += length[i];
             metaDataFlags[i] = (Contigs->contigs_arr[frag_id[i]].metaDataFlags == nullptr)?0:*(Contigs->contigs_arr[frag_id[i]].metaDataFlags);
             while (global_frag_index < frag_id[i])
@@ -165,6 +168,21 @@ struct Frag4compress {
     
 
 private:
+    static void warn_if_zero_length_contig(const map_contigs* Contigs, u32 frag_id, u32 index_in_list)
+    {
+        if (frag_id >= Contigs->numberOfContigs)
+            return;
+        u32 L = Contigs->contigs_arr[frag_id].length;
+        if (L != 0)
+            return;
+        fmt::print(
+            stderr,
+            "[Frag4compress] contig_id={} has length 0 in map_contigs (fragment list index {}); "
+            "compressed Hi-C will skip 0×N blocks for this contig.\n",
+            frag_id,
+            index_in_list);
+    }
+
     void cleanup()
     {   
         if (frag_id)

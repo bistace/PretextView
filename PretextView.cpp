@@ -560,6 +560,26 @@ Mouse_Move;
 global_variable
 tool_tip Tool_Tip_Move; 
 
+global_variable
+point2f
+MetaData_Help_Pos;
+
+global_variable
+point2f
+MetaData_Help_Size;
+
+global_variable
+point2f
+MetaData_Help_Drag_Offset;
+
+global_variable
+u08
+MetaData_Help_Pos_Set = 0;
+
+global_variable
+u08
+MetaData_Help_Drag = 0;
+
 
 global_variable
 edit_pixels
@@ -1093,6 +1113,11 @@ global_variable auto auto_curation_state = AutoCurationState();
 global_function void
 UserSaveState(const char *headerHash = "userprofile", u08 overwrite = 1, char *path = 0);
 
+global_function void
+CopyHighlightedRegionToClipboard(GLFWwindow *window);
+
+global_variable f64 CopyToast_Time = 0.0;
+
 
 global_variable
 u08
@@ -1195,6 +1220,7 @@ struct file_browser saveBrowser;
 struct file_browser loadBrowser;
 struct file_browser saveAGPBrowser;
 struct file_browser saveEditsBrowser;
+struct file_browser saveClipboardBrowser;
 struct file_browser loadAGPBrowser;
 
 
@@ -1533,6 +1559,10 @@ global_variable
 char
 Edits_Name_Buffer[1024] = {0};
 
+global_variable
+char
+Clipboard_Save_Name_Buffer[1024] = "clipboard.txt";
+
 global_function
 void
 SetSaveStateNameBuffer(char *name)
@@ -1542,7 +1572,9 @@ SetSaveStateNameBuffer(char *name)
     {
         AGP_Name_Buffer[ptr] = *name;
         Edits_Name_Buffer[ptr] = *name;
-        Save_State_Name_Buffer[ptr++] = *name++;
+        Save_State_Name_Buffer[ptr] = *name;
+        ptr++;
+        name++;
     }
     
     u32 ptr1 = ptr;
@@ -1559,6 +1591,12 @@ SetSaveStateNameBuffer(char *name)
     name = (char *)"_edits.txt";
     while (*name) Edits_Name_Buffer[ptr++] = *name++;
     Edits_Name_Buffer[ptr] = 0;
+
+    ptr = ptr1;
+    name = (char *)"_clipboard.txt";
+    while (*name) Clipboard_Save_Name_Buffer[ptr++] = *name++;
+    Clipboard_Save_Name_Buffer[ptr] = 0;
+
 }
 
 
@@ -1568,6 +1606,7 @@ SetSaveStateNameBuffer(char *name)
             1 save state
             2 agp state
             3 edits save
+            4 clipboard save
 */
 global_function
 u08
@@ -1711,7 +1750,7 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
                         {
                             if (save)
                             {
-                                char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : Save_State_Name_Buffer);
+                                char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : (save == 4 ? Clipboard_Save_Name_Buffer : Save_State_Name_Buffer));
                                 strncpy(nameBuffer, browser->files[fileIndex], 1024);
                             }
                             else
@@ -1754,7 +1793,7 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
                 f32 fileRatio2[] = {0.45f, 0.1f, 0.18f, 0.17f, NK_UNDEFINED};
                 nk_layout_row(ctx, NK_DYNAMIC, Screen_Scale.y * 35.0f, save == 2 ? 5 : 3, save == 2 ? fileRatio2 : fileRatio);
 
-                char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : Save_State_Name_Buffer);
+                char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : (save == 4 ? Clipboard_Save_Name_Buffer : Save_State_Name_Buffer));
                 u08 saveViaEnter = (nk_edit_string_zero_terminated(ctx, NK_EDIT_FIELD | NK_EDIT_SIG_ENTER, nameBuffer, 1024, 0) & NK_EDIT_COMMITED) ? 1 : 0;
                 
                 static u08 overwrite = 0;
@@ -1769,7 +1808,7 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
                 {
                     strncpy(browser->file, browser->directory, MAX_PATH_LEN);
                     size_t n = strlen(browser->file);
-                    char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : Save_State_Name_Buffer);
+                    char *nameBuffer = save == 2 ? AGP_Name_Buffer : (save == 3 ? Edits_Name_Buffer : (save == 4 ? Clipboard_Save_Name_Buffer : Save_State_Name_Buffer));
                     strncpy(browser->file + n, nameBuffer, MAX_PATH_LEN - n);
                     ret = 1 | (overwrite ? 2 : 0) | (singletons ? 4 : 0) | (preserveOrder ? 8 : 0);
                 }
@@ -1783,6 +1822,106 @@ FileBrowserRun(const char *name, struct file_browser *browser, struct nk_context
     nk_end(ctx);
     
     return(ret);
+}
+
+#define ClipboardEditorBufferSize 32768
+#define ClipboardEditorLastCopiedSize 4096
+
+/* clipboard editor, highlight, copy and paste */
+global_variable char ClipboardEditor_LastCopied[ClipboardEditorLastCopiedSize] = {0};
+global_variable char ClipboardEditor_Buffer[ClipboardEditorBufferSize] = {0};
+global_variable u08 ClipboardEditor_Window_Open = 0;
+
+static void nk_clipboard_paste(nk_handle ud, struct nk_text_edit *edit)
+{
+    GLFWwindow *win = (GLFWwindow *)ud.ptr;
+    const char *text = win ? glfwGetClipboardString(win) : 0;
+    if (text) nk_textedit_paste(edit, text, nk_strlen(text));
+}
+static void nk_clipboard_copy(nk_handle ud, const char *text, int len)
+{
+    GLFWwindow *win = (GLFWwindow *)ud.ptr;
+    if (!win) return;
+    char *buf = (char *)malloc((size_t)len + 1);
+    if (buf) { memcpy(buf, text, (size_t)len); buf[len] = 0; glfwSetClipboardString(win, buf); free(buf); }
+}
+
+global_function
+/* save clipboard to file */
+void
+SaveClipboardToFile(char *path, u08 overwrite)
+{
+    FILE *file;
+    if (!overwrite && (file = fopen((const char *)path, "rb")))
+    {
+        fclose(file);
+        return;
+    }
+    if ((file = fopen((const char *)path, "w")))
+    {
+        fputs(ClipboardEditor_Buffer, file);
+        fclose(file);
+    }
+}
+
+global_function
+void
+ClipboardEditorRun(struct nk_context *ctx, u08 show, GLFWwindow *glfwWin, s32 *showSaveClipboardScreen, s32 *saveAsClicked)
+{
+    const char *name = "Clipboard Editor";
+    struct nk_window *window = nk_window_find(ctx, name);
+
+    u08 doesExist = window != 0;
+    if (!show && !doesExist) { ClipboardEditor_Window_Open = 0; return; }
+    if (show && doesExist && (window->flags & NK_WINDOW_HIDDEN)) window->flags &= ~(nk_flags)NK_WINDOW_HIDDEN;
+
+    if (nk_begin(ctx, name, nk_rect(Screen_Scale.x * 100, Screen_Scale.y * 80, Screen_Scale.x * 600, Screen_Scale.y * 450),
+                NK_WINDOW_BORDER | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE | NK_WINDOW_TITLE | NK_WINDOW_SCALABLE))
+    {
+        ClipboardEditor_Window_Open = 1;
+        static u08 loadedOnce = 0;
+
+        if (show && !loadedOnce)
+        {
+            loadedOnce = 1;
+            if (ClipboardEditor_LastCopied[0])
+            {
+                size_t len = strlen(ClipboardEditor_LastCopied);
+                if (len >= ClipboardEditorBufferSize) len = ClipboardEditorBufferSize - 1;
+                memcpy(ClipboardEditor_Buffer, ClipboardEditor_LastCopied, len);
+                ClipboardEditor_Buffer[len] = '\0';
+            }
+            else
+            {
+                const char *clip = glfwWin ? glfwGetClipboardString(glfwWin) : 0;
+                if (clip)
+                {
+                    size_t len = strlen(clip);
+                    if (len >= ClipboardEditorBufferSize) len = ClipboardEditorBufferSize - 1;
+                    memcpy(ClipboardEditor_Buffer, clip, len);
+                    ClipboardEditor_Buffer[len] = '\0';
+                }
+                else ClipboardEditor_Buffer[0] = '\0';
+            }
+        }
+        if (!show) loadedOnce = 0;
+
+        /* Edit box first so it gets focus by default; Save as below to avoid accidental activation */
+        nk_layout_row_dynamic(ctx, Screen_Scale.y * 350.0f, 1);
+        nk_edit_string_zero_terminated(ctx, NK_EDIT_BOX | NK_EDIT_CLIPBOARD, ClipboardEditor_Buffer, ClipboardEditorBufferSize - 1, 0);
+
+        nk_layout_row_dynamic(ctx, Screen_Scale.y * 28.0f, 1);
+        if (nk_button_label(ctx, "Save as") && showSaveClipboardScreen && saveAsClicked)
+        {
+            *showSaveClipboardScreen = 1;
+            *saveAsClicked = 1;
+        }
+    }
+    else
+    {
+        ClipboardEditor_Window_Open = 0;
+    }
+    nk_end(ctx);
 }
 
 global_function
@@ -1818,7 +1957,7 @@ MetaTagsEditorRun(struct nk_context *ctx, u08 show)
                 {
                     if (!strlen((const char *)Meta_Data->tags[index]))
                     {
-                        ForLoop2(Number_of_Pixels_1D) Map_State->metaDataFlags[index2] &= ~(1 << index);
+                        ForLoop2(Number_of_Pixels_1D) Map_State->metaDataFlags[index2] &= ~(1ULL << index);
                         u32 nextActive = index;
                         ForLoop2((ArrayCount(Meta_Data->tags) - 1))
                         {
@@ -2904,6 +3043,18 @@ MouseMove(GLFWwindow* window, f64 x, f64 y)
 
     u32 redisplay = 0;
 
+    if (MetaData_Help_Drag && MetaData_Edit_Mode && !UI_On)
+    {
+        s32 w, h;
+        glfwGetWindowSize(window, &w, &h);
+        MetaData_Help_Pos.x = (f32)x - MetaData_Help_Drag_Offset.x;
+        MetaData_Help_Pos.y = (f32)y - MetaData_Help_Drag_Offset.y;
+        MetaData_Help_Pos.x = my_Max(0.0f, my_Min(MetaData_Help_Pos.x, (f32)w - MetaData_Help_Size.x));
+        MetaData_Help_Pos.y = my_Max(0.0f, my_Min(MetaData_Help_Pos.y, (f32)h - MetaData_Help_Size.y));
+        MetaData_Help_Pos_Set = 1;
+        redisplay = 1;
+    }
+
     if (UI_On)
     {
     }
@@ -3271,8 +3422,8 @@ Mouse(GLFWwindow* window, s32 button, s32 action, s32 mods)
         }
         else if (button == GLFW_MOUSE_BUTTON_MIDDLE && Edit_Mode && action == GLFW_RELEASE && !Edit_Pixels.editing)
         {
-            Edit_Pixels.editing = 1;
             Edit_Pixels.selecting = 0;
+            if (!Edit_Pixels.editing) Edit_Pixels.editing = 1;
             MouseMove(window, x, y);
         }
         else if (button == GLFW_MOUSE_BUTTON_MIDDLE && Edit_Mode && action == GLFW_PRESS && !Edit_Pixels.editing)
@@ -3331,13 +3482,30 @@ Mouse(GLFWwindow* window, s32 button, s32 action, s32 mods)
         }
         else if (button == primaryMouse && MetaData_Edit_Mode && action == GLFW_PRESS)
         {
-            MetaData_Edit_State = 1;
-            MouseMove(window, x, y);
+            if (MetaData_Help_Pos_Set &&
+                x >= MetaData_Help_Pos.x &&
+                y >= MetaData_Help_Pos.y &&
+                x <= (MetaData_Help_Pos.x + MetaData_Help_Size.x) &&
+                y <= (MetaData_Help_Pos.y + MetaData_Help_Size.y))
+            {
+                MetaData_Help_Drag = 1;
+                MetaData_Help_Drag_Offset.x = (f32)x - MetaData_Help_Pos.x;
+                MetaData_Help_Drag_Offset.y = (f32)y - MetaData_Help_Pos.y;
+            }
+            else
+            {
+                MetaData_Edit_State = 1;
+                MouseMove(window, x, y);
+            }
         }
         else if (button == GLFW_MOUSE_BUTTON_MIDDLE && MetaData_Edit_Mode && action == GLFW_PRESS)
         {
             MetaData_Edit_State = 2;
             MouseMove(window, x, y);
+        }
+        else if (button == primaryMouse && MetaData_Help_Drag && action == GLFW_RELEASE)
+        {
+            MetaData_Help_Drag = 0;
         }
         else if ((button == GLFW_MOUSE_BUTTON_MIDDLE || button == primaryMouse) && MetaData_Edit_Mode && action == GLFW_RELEASE)
         {
@@ -5264,10 +5432,24 @@ Render() {
                 glUseProgram(Flat_Shader->shaderProgram);
                 glUniform4fv(Flat_Shader->colorLocation, 1, (f32 *)&MetaData_Mode_Data->bg);
 
-                vert[0].x = width - spacing - textWidth;  vert[0].y = height - spacing - textBoxHeight;
-                vert[1].x = width - spacing - textWidth;  vert[1].y = height - spacing;
-                vert[2].x = width - spacing;              vert[2].y = height - spacing;
-                vert[3].x = width - spacing;              vert[3].y = height - spacing - textBoxHeight;
+                MetaData_Help_Size.x = textWidth;
+                MetaData_Help_Size.y = textBoxHeight;
+                if (!MetaData_Help_Pos_Set)
+                {
+                    MetaData_Help_Pos.x = width - spacing - textWidth;
+                    MetaData_Help_Pos.y = height - spacing - textBoxHeight;
+                    MetaData_Help_Pos_Set = 1;
+                }
+                MetaData_Help_Pos.x = my_Max(0.0f, my_Min(MetaData_Help_Pos.x, width - textWidth));
+                MetaData_Help_Pos.y = my_Max(0.0f, my_Min(MetaData_Help_Pos.y, height - textBoxHeight));
+
+                const f32 boxX = MetaData_Help_Pos.x;
+                const f32 boxY = MetaData_Help_Pos.y;
+
+                vert[0].x = boxX;             vert[0].y = boxY;
+                vert[1].x = boxX;             vert[1].y = boxY + textBoxHeight;
+                vert[2].x = boxX + textWidth; vert[2].y = boxY + textBoxHeight;
+                vert[3].x = boxX + textWidth; vert[3].y = boxY;
 
                 glBindBuffer(GL_ARRAY_BUFFER, Waypoint_Data->vbos[ptr]);
                 glBufferSubData(GL_ARRAY_BUFFER, 0, 4 * sizeof(vertex), vert);
@@ -5278,8 +5460,8 @@ Render() {
                 for (u32 i=0; i< helpTexts.size() ; i++) {
                     fonsDrawText(
                         FontStash_Context, 
-                        width - spacing - textWidth, 
-                        height - spacing - textBoxHeight + (lh + 1.0f) * i, 
+                        boxX, 
+                        boxY + (lh + 1.0f) * i, 
                         helpTexts[i].c_str(), 
                         0);
                 }
@@ -5309,9 +5491,114 @@ Render() {
             fonsVertMetrics(FontStash_Context, 0, 0, &lh);
             fonsSetColor(FontStash_Context, FourFloatColorToU32(Tool_Tip->fg));
            
-            // Extension info, extra lines
+            // Extension + scaffold/tag info, extra lines
             u32 nExtra = 0;
             f32 longestExtraLineLength = 0.0f;
+            char scaffLine[64];
+            char tagLine[256];
+            const u32 nPix = Number_of_Pixels_1D ? Number_of_Pixels_1D - 1 : 0;
+            const u32 tooltipPixelX = my_Min(Tool_Tip_Move.pixels.x, nPix);
+            const u32 tooltipPixelY = my_Min(Tool_Tip_Move.pixels.y, nPix);
+            const u32 tooltipPixel = tooltipPixelX;
+            const u32 scaffId = Map_State->scaffIds[tooltipPixel];
+            stbsp_snprintf(scaffLine, sizeof(scaffLine), "Scaffold: %u", scaffId);
+            longestExtraLineLength = my_Max(
+                longestExtraLineLength,
+                fonsTextBounds(FontStash_Context, 0, 0, scaffLine, 0, NULL));
+            ++nExtra;
+
+            {
+                u64 flags = Map_State->metaDataFlags[tooltipPixel];
+                if (Contigs && tooltipPixel < Number_of_Pixels_1D)
+                {
+                    u32 contigId = Map_State->contigIds[tooltipPixel];
+                    if (contigId < Contigs->numberOfContigs)
+                    {
+                        u64 *flagPtr = (Contigs->contigs_arr + contigId)->metaDataFlags;
+                        if (flagPtr) flags = *flagPtr;
+                    }
+                }
+                if (!flags)
+                {
+                    stbsp_snprintf(tagLine, sizeof(tagLine), "Tags: <none>");
+                }
+                else
+                {
+                    const u32 maxShown = 6;
+                    char tagsBuffer[192];
+                    const size_t tagsBufferSize = sizeof(tagsBuffer);
+                    tagsBuffer[0] = '\0';
+                    u32 tagCount = 0;
+                    u32 shownCount = 0;
+                    size_t tagsLen = 0;
+                    ForLoop(ArrayCount(Meta_Data->tags))
+                    {
+                        if (!(flags & (1ULL << index))) continue;
+                        ++tagCount;
+                        if (shownCount >= maxShown) continue;
+                        const char *tagName = (const char *)Meta_Data->tags[index];
+                        char fallback[16];
+                        if (!tagName || !tagName[0])
+                        {
+                            stbsp_snprintf(fallback, sizeof(fallback), "Tag%u", index + 1);
+                            tagName = fallback;
+                        }
+                        if (tagsLen + 1 >= tagsBufferSize) break;
+                        if (shownCount)
+                        {
+                            size_t remaining = tagsBufferSize - tagsLen;
+                            int wrote = stbsp_snprintf(
+                                tagsBuffer + tagsLen,
+                                remaining,
+                                ", ");
+                            if (wrote < 0) break;
+                            if ((size_t)wrote >= remaining)
+                            {
+                                tagsLen = tagsBufferSize - 1;
+                                tagsBuffer[tagsLen] = '\0';
+                                break;
+                            }
+                            tagsLen += (size_t)wrote;
+                        }
+                        {
+                            size_t remaining = tagsBufferSize - tagsLen;
+                            int wrote = stbsp_snprintf(
+                                tagsBuffer + tagsLen,
+                                remaining,
+                                "%s",
+                                tagName);
+                            if (wrote < 0) break;
+                            if ((size_t)wrote >= remaining)
+                            {
+                                tagsLen = tagsBufferSize - 1;
+                                tagsBuffer[tagsLen] = '\0';
+                                break;
+                            }
+                            tagsLen += (size_t)wrote;
+                        }
+                        ++shownCount;
+                    }
+                    if (tagCount > shownCount)
+                    {
+                        stbsp_snprintf(
+                            tagLine,
+                            sizeof(tagLine),
+                            "Tags: %s +%u more",
+                            tagsBuffer,
+                            tagCount - shownCount);
+                    }
+                    else
+                    {
+                        stbsp_snprintf(tagLine, sizeof(tagLine), "Tags: %s", tagsBuffer);
+                    }
+                }
+            }
+            longestExtraLineLength = my_Max(
+                longestExtraLineLength,
+                fonsTextBounds(FontStash_Context, 0, 0, tagLine, 0, NULL));
+            ++nExtra;
+
+            const u32 extraFixedLines = 2;
             {
                 if (Extensions.head)
                 {
@@ -5326,7 +5613,7 @@ Render() {
                                     if (gph->on)
                                     {
                                         glBindBuffer(GL_TEXTURE_BUFFER, Contact_Matrix->pixelRearrangmentLookupBuffer);
-                                        u32 *buffer = (u32 *)glMapBufferRange(GL_TEXTURE_BUFFER, Tool_Tip_Move.pixels.x * sizeof(u32), sizeof(u32), GL_MAP_READ_BIT);
+                                        u32 *buffer = (u32 *)glMapBufferRange(GL_TEXTURE_BUFFER, tooltipPixelX * sizeof(u32), sizeof(u32), GL_MAP_READ_BIT);
 
                                         stbsp_snprintf(buff, sizeof(buff), "%s: %$d", (char *)gph->name, gph->data[*buffer]);
                                         ++nExtra;
@@ -5346,10 +5633,10 @@ Render() {
             textBoxHeight *= (3.0f + (f32)nExtra);
             textBoxHeight += (2.0f + (f32)nExtra);
 
-            u32 id1 = GetOriginalContigBaseId(Map_State->originalContigIds[Tool_Tip_Move.pixels.x]);
-            u32 id2 = GetOriginalContigBaseId(Map_State->originalContigIds[Tool_Tip_Move.pixels.y]);
-            u32 coord1 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.x];
-            u32 coord2 = Map_State->contigRelCoords[Tool_Tip_Move.pixels.y];
+            u32 id1 = GetOriginalContigBaseId(Map_State->originalContigIds[tooltipPixelX]);
+            u32 id2 = GetOriginalContigBaseId(Map_State->originalContigIds[tooltipPixelY]);
+            u32 coord1 = Map_State->contigRelCoords[tooltipPixelX];
+            u32 coord2 = Map_State->contigRelCoords[tooltipPixelY];
             
             f64 bpPerPixel = (f64)Total_Genome_Length / (f64)Number_of_Pixels_1D;
 
@@ -5394,6 +5681,10 @@ Render() {
                     ModelYToScreen(-Tool_Tip_Move.worldCoords.y) + spacing + lh + 1.0f, line2, 0);
             fonsDrawText(FontStash_Context, ModelXToScreen(Tool_Tip_Move.worldCoords.x) + spacing, 
                     ModelYToScreen(-Tool_Tip_Move.worldCoords.y) + spacing + (2.0f * lh) + 2.0f, line3, 0);
+            fonsDrawText(FontStash_Context, ModelXToScreen(Tool_Tip_Move.worldCoords.x) + spacing, 
+                    ModelYToScreen(-Tool_Tip_Move.worldCoords.y) + spacing + (3.0f * (lh + 1.0f)), scaffLine, 0);
+            fonsDrawText(FontStash_Context, ModelXToScreen(Tool_Tip_Move.worldCoords.x) + spacing, 
+                    ModelYToScreen(-Tool_Tip_Move.worldCoords.y) + spacing + (4.0f * (lh + 1.0f)), tagLine, 0);
 
             {
                 if (Extensions.head)
@@ -5410,12 +5701,12 @@ Render() {
                                     if (gph->on)
                                     {
                                         glBindBuffer(GL_TEXTURE_BUFFER, Contact_Matrix->pixelRearrangmentLookupBuffer);
-                                        u32 *buffer = (u32 *)glMapBufferRange(GL_TEXTURE_BUFFER, Tool_Tip_Move.pixels.x * sizeof(u32), sizeof(u32), GL_MAP_READ_BIT);
+                                        u32 *buffer = (u32 *)glMapBufferRange(GL_TEXTURE_BUFFER, tooltipPixelX * sizeof(u32), sizeof(u32), GL_MAP_READ_BIT);
 
                                         stbsp_snprintf(buff, sizeof(buff), "%s: %$d", (char *)gph->name, gph->data[*buffer]);
 
                                         fonsDrawText(FontStash_Context, ModelXToScreen(Tool_Tip_Move.worldCoords.x) + spacing, 
-                                                ModelYToScreen(-Tool_Tip_Move.worldCoords.y) + spacing + ((2.0f + (f32)(++count)) * (lh + 1.0f)), buff, 0);
+                                                ModelYToScreen(-Tool_Tip_Move.worldCoords.y) + spacing + ((2.0f + (f32)extraFixedLines + (f32)(++count)) * (lh + 1.0f)), buff, 0);
 
                                         glUnmapBuffer(GL_TEXTURE_BUFFER);
                                         glBindBuffer(GL_TEXTURE_BUFFER, 0);
@@ -5938,6 +6229,24 @@ Render() {
 
             ChangeSize((s32)width, (s32)height);
         }
+
+        if (CopyToast_Time > 0.0 && (GetTime() - CopyToast_Time) < 2.0)
+        {
+            u32 colour = glfonsRGBA(Theme_Colour.r, Theme_Colour.g, Theme_Colour.b, Theme_Colour.a);
+
+            fonsClearState(FontStash_Context);
+            fonsSetSize(FontStash_Context, 32.0f * Screen_Scale.x);
+            fonsSetAlign(FontStash_Context, FONS_ALIGN_CENTER | FONS_ALIGN_MIDDLE);
+            fonsSetFont(FontStash_Context, Font_Normal);
+            fonsSetColor(FontStash_Context, colour);
+
+            glUseProgram(UI_Shader->shaderProgram);
+            glUniformMatrix4fv(Flat_Shader->matLocation, 1, GL_FALSE, textNormalMat);
+            glViewport(0, 0, (s32)width, (s32)height);
+            fonsDrawText(FontStash_Context, width * 0.5f, height * 0.15f, "Copied to clipboard", 0);
+
+            ChangeSize((s32)width, (s32)height);
+        }
     }
 }
 
@@ -6408,6 +6717,9 @@ LoadFile(const char *filePath, memory_arena *arena, char **fileName, u64 *header
        
         Edit_Pixels.editing = 0;
         Global_Mode = mode_normal;
+
+        MetaData_Help_Pos_Set = 0;
+        MetaData_Help_Drag = 0;
 
         Extensions = {};
 
@@ -8324,12 +8636,32 @@ void AutoCurationFromFragsOrder(
     std::vector<s32> predicted_order = frags_order_->get_order_without_chromosomeInfor(); // start from 1
     if (using_select_area)
     {
+        // FragsOrder uses local indices 1..N (sign = orientation). Map each global slot in the
+        // selection (frags_id_to_sort[k] = map position / 0-based contig id) to the actual global
+        // contig id: frags_id_to_sort[abs(predicted_order[k]) - 1]. Do not use front()+abs(...).
         std::vector<s32> full_predicted_order(num_frags);
         std::iota(full_predicted_order.begin(), full_predicted_order.end(), 1);
         std::vector<u32> frags_id_to_sort = select_area->get_to_sort_frags_id(Contigs);
-        for (u32 i=0; i < frags_id_to_sort.size(); i++) 
-            full_predicted_order[frags_id_to_sort[i]] = (predicted_order[i]>0?1:-1) * (frags_id_to_sort.front() + std::abs(predicted_order[i]));
-        predicted_order = full_predicted_order;
+        const u32 n_sort = (u32)frags_id_to_sort.size();
+        for (u32 k = 0; k < n_sort; k++)
+        {
+            const u32 global_pos = frags_id_to_sort[k];
+            const s32 local_signed = predicted_order[k];
+            const u32 local_1based = (u32)std::abs(local_signed);
+            if (local_1based < 1u || local_1based > n_sort)
+            {
+                fmt::print(
+                    stderr,
+                    "[AutoCurationFromFragsOrder] invalid local fragment index {} (expected 1..{})\n",
+                    local_1based,
+                    n_sort);
+                assert(0);
+            }
+            const u32 src0 = frags_id_to_sort[local_1based - 1u];
+            const s32 global_1based = (s32)(src0 + 1u);
+            full_predicted_order[global_pos] = (local_signed > 0 ? 1 : -1) * global_1based;
+        }
+        predicted_order = std::move(full_predicted_order);
     }
     for (s32 i = 0; i < num_frags; ++i) current_order[i] = {i+1, contigs_->contigs_arr[i].length}; // start from 1
     auto move_current_order_element = [&current_order, &num_frags](u32 from, u32 to)
@@ -8381,12 +8713,12 @@ void AutoCurationFromFragsOrder(
 
             // find the pixel range of the contig to move
             u32 pixelFrom = 0, tmp_i = 0; // tmp_i is the index of the current contig, which is going to be processed
-            while (std::abs(predicted_order[i])!=std::abs(current_order[tmp_i].first))
+                while (std::abs(predicted_order[i])!=std::abs(current_order[tmp_i].first))
             {
                 if (tmp_i >= num_frags)
                 {   
                     char buff[256];
-                    snprintf(buff, sizeof(buff), "Error: contig %d not found in the current order.\n", current_order[i].first);
+                    snprintf(buff, sizeof(buff), "Error: contig %d not found in the current order.\n", (int)std::abs(predicted_order[i]));
                     MY_CHECK(buff);
                     assert(0);
                 }
@@ -8575,6 +8907,10 @@ auto_sort_func(char* currFileName)
         false  // show_flag
     ); 
     restore_settings_after_copy(original_color_control_points);
+
+    // Rebuild contigIds from originalContigIds + contigRelCoords so selection matches the current map
+    // (RearrangeMap updates those buffers but not contigIds until this runs).
+    UpdateContigsFromMapState();
 
     // check if select the area for sorting
     SelectArea selected_area;
@@ -9563,6 +9899,11 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                     break;
                 
                 case GLFW_KEY_P:
+                    if (Edit_Mode)
+                    {
+                        CopyHighlightedRegionToClipboard(window);
+                        keyPressed = 1;
+                    }
                     break;
 
                 case GLFW_KEY_Q:
@@ -9711,21 +10052,12 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                 case GLFW_KEY_V:
                     if (Edit_Mode && action != GLFW_RELEASE)
                     {
+                        // One breakpoint per keypress: V at start of selection (min pixel).
                         u32 start = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-                        u32 end = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
-                        u32 didBreak = 0;
-                        if (BreakMap((int)start, 1))
+                        u32 loc = start;
+                        if (BreakMap((int)loc, 1))
                         {
-                            AddBreakEdit(start);
-                            didBreak = 1;
-                        }
-                        if (end != start && BreakMap((int)end, 1))
-                        {
-                            AddBreakEdit(end);
-                            didBreak = 1;
-                        }
-                        if (didBreak)
-                        {
+                            AddBreakEdit(loc);
                             UpdateContigsFromMapState();
                             UpdateScaffolds();
                             Redisplay = 1;
@@ -9813,10 +10145,10 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                         glfwGetCursorPos(window, &x, &y);
                         MouseMove(window, x, y);
                     }
-                    else if (Edit_Mode && !Edit_Pixels.editing && action == GLFW_RELEASE)
+                    else if (Edit_Mode && Edit_Pixels.selecting && action == GLFW_RELEASE)
                     {
-                        Edit_Pixels.editing = 1;
                         Edit_Pixels.selecting = 0;
+                        if (!Edit_Pixels.editing) Edit_Pixels.editing = 1;
                         f64 x, y;
                         glfwGetCursorPos(window, &x, &y);
                         MouseMove(window, x, y);
@@ -12027,7 +12359,7 @@ UserSaveState(const char *headerHash, u08 overwrite , char *path)
     // finished (shaoheng) save default file browser directory
     const char* placeholder = "fdpc"; // placeholder for File Directory Path Cache 
     for (int i = 0; i < 4; i ++ ) fwrite(&placeholder[i], sizeof(char), 1, file);
-    for (const file_browser& browser_tmp : { browser, saveBrowser, loadBrowser, saveAGPBrowser, saveEditsBrowser, loadAGPBrowser }) {
+    for (const file_browser& browser_tmp : { browser, saveBrowser, loadBrowser, saveAGPBrowser, saveEditsBrowser, saveClipboardBrowser, loadAGPBrowser }) {
         if (browser_tmp.directory[0]!='\0') {
             u32 dir_len = strlen(browser_tmp.directory);
             fwrite(&dir_len, sizeof(dir_len), 1, file);
@@ -12191,7 +12523,7 @@ global_function
     // file directory path cache
     char lable[4];
     if (fread(lable, sizeof(char), 4, file) == 4 && strncmp(lable, "fdpc", 4) == 0) {   
-        std::vector<file_browser*> browsers = { &browser, &saveBrowser, &loadBrowser, &saveAGPBrowser, &saveEditsBrowser, &loadAGPBrowser };
+        std::vector<file_browser*> browsers = { &browser, &saveBrowser, &loadBrowser, &saveAGPBrowser, &saveEditsBrowser, &saveClipboardBrowser, &loadAGPBrowser };
         for (file_browser* browser_ptr : browsers) {
             u32 dir_len;
             if (fread(&dir_len, sizeof(dir_len), 1, file) == 1 && dir_len > 0) {
@@ -12237,6 +12569,109 @@ TextInput(GLFWwindow* window, u32 codepoint)
         if (Global_Text_Buffer_Ptr == ArrayCount(Global_Text_Buffer)) Global_Text_Buffer_Ptr = 0;
         //nk_input_unicode(NK_Context, codepoint); 
     }
+}
+
+global_function
+void
+CopyHighlightedRegionToClipboard(GLFWwindow *window)
+{
+    if (!File_Loaded || !Map_State || !Original_Contigs || !Number_of_Pixels_1D) return;
+
+    u32 pixelStart, pixelEnd;
+    if (Edit_Pixels.editing)
+    {
+        pixelStart = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+        pixelEnd = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+    }
+    else if (Edit_Pixels.selecting)
+    {
+        pixelStart = my_Min(Edit_Pixels.selectPixels.x, Edit_Pixels.selectPixels.y);
+        pixelEnd = my_Max(Edit_Pixels.selectPixels.x, Edit_Pixels.selectPixels.y);
+    }
+    else
+    {
+        /* Use current cursor position when no explicit selection */
+        pixelStart = my_Min(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+        pixelEnd = my_Max(Edit_Pixels.pixels.x, Edit_Pixels.pixels.y);
+    }
+
+    pixelStart = my_Min(pixelStart, Number_of_Pixels_1D - 1);
+    pixelEnd = my_Min(pixelEnd, Number_of_Pixels_1D - 1);
+
+    /* Map pixels are uniform in bp along the whole map; contigRelCoords are local indices along each
+       fragment. Convert selection to bp along the fragment using startCoord and inversion (not rel * global bp). */
+    f64 bp_per_map_pixel = (f64)Total_Genome_Length / (f64)Number_of_Pixels_1D;
+
+    char buffer[1024];
+    u32 bufPtr = 0;
+
+    for (u32 p = pixelStart; p <= pixelEnd; )
+    {
+        u32 fragId = Map_State->contigIds[p];
+        u32 baseId = GetOriginalContigBaseId(Map_State->originalContigIds[p]);
+        u32 minRel = Map_State->contigRelCoords[p];
+        u32 maxRel = Map_State->contigRelCoords[p];
+        u32 q = p + 1;
+        while (q <= pixelEnd && Map_State->contigIds[q] == fragId)
+        {
+            u32 r = Map_State->contigRelCoords[q];
+            if (r < minRel) minRel = r;
+            if (r > maxRel) maxRel = r;
+            ++q;
+        }
+        p = q;
+
+        if (fragId >= Contigs->numberOfContigs) continue;
+
+        contig *c = Contigs->contigs_arr + fragId;
+        f64 startMbp;
+        f64 endMbp;
+        if (!IsContigInverted(fragId))
+        {
+            startMbp = ((f64)(minRel - c->startCoord) * bp_per_map_pixel) / 1e6;
+            endMbp = ((f64)(maxRel - c->startCoord + 1u) * bp_per_map_pixel) / 1e6;
+        }
+        else
+        {
+            startMbp = ((f64)(c->startCoord - maxRel) * bp_per_map_pixel) / 1e6;
+            endMbp = ((f64)(c->startCoord - minRel + 1u) * bp_per_map_pixel) / 1e6;
+        }
+        if (startMbp < 0.0) startMbp = 0.0;
+        if (endMbp < 0.0) endMbp = 0.0;
+
+        const char *name = (const char *)(Original_Contigs + baseId)->name;
+        bufPtr += (u32)stbsp_snprintf(buffer + bufPtr, (s32)(sizeof(buffer) - bufPtr), "%s%s %.2f Mbp - %.2f Mbp",
+            bufPtr ? "; " : "", name, startMbp, endMbp);
+    }
+    glfwSetClipboardString(window, buffer);
+    size_t len = strlen(buffer);
+    /* Append to ClipboardEditor_LastCopied instead of overwriting */
+    size_t lastLen = strlen(ClipboardEditor_LastCopied);
+    if (lastLen > 0 && lastLen < ClipboardEditorLastCopiedSize - 2)
+    {
+        ClipboardEditor_LastCopied[lastLen] = '\n';
+        lastLen++;
+    }
+    size_t copyLen = len;
+    if (lastLen + copyLen >= ClipboardEditorLastCopiedSize) copyLen = ClipboardEditorLastCopiedSize - lastLen - 1;
+    memcpy(ClipboardEditor_LastCopied + lastLen, buffer, copyLen + 1);
+    ClipboardEditor_LastCopied[lastLen + copyLen] = '\0';
+    /* If Clipboard Editor is open, append to its buffer too */
+    if (ClipboardEditor_Window_Open)
+    {
+        size_t bufLen = strlen(ClipboardEditor_Buffer);
+        if (bufLen > 0 && bufLen < ClipboardEditorBufferSize - 2)
+        {
+            ClipboardEditor_Buffer[bufLen] = '\n';
+            bufLen++;
+        }
+        size_t bufCopy = len;
+        if (bufLen + bufCopy >= ClipboardEditorBufferSize) bufCopy = ClipboardEditorBufferSize - bufLen - 1;
+        memcpy(ClipboardEditor_Buffer + bufLen, buffer, bufCopy + 1);
+        ClipboardEditor_Buffer[bufLen + bufCopy] = '\0';
+    }
+    CopyToast_Time = GetTime();
+    Redisplay = 1;
 }
 
 global_function
@@ -12738,6 +13173,7 @@ MainArgs
         FileBrowserInit(&loadBrowser, &media);
         FileBrowserInit(&saveAGPBrowser, &media);
         FileBrowserInit(&saveEditsBrowser, &media);
+        FileBrowserInit(&saveClipboardBrowser, &media);
         FileBrowserInit(&loadAGPBrowser, &media);
     }
     
@@ -12950,7 +13386,19 @@ MainArgs
 
             Stuck_Problem_Check_Debug
 
-            /*nk_input_key(NK_Context, NK_KEY_DEL, glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS);
+            {
+                static u08 clipboard_ctx_set = 0;
+                if (!clipboard_ctx_set)
+                {
+                    NK_Context->clip.userdata = nk_handle_ptr(window);
+                    NK_Context->clip.paste = nk_clipboard_paste;
+                    NK_Context->clip.copy = nk_clipboard_copy;
+                    clipboard_ctx_set = 1;
+                }
+            }
+
+            /* State-based keys for Nuklear text fields (Clipboard Editor, etc.): navigation + Ctrl/Cmd+C/V/X. */
+            nk_input_key(NK_Context, NK_KEY_DEL, glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS);
             nk_input_key(NK_Context, NK_KEY_ENTER, glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS);
             nk_input_key(NK_Context, NK_KEY_TAB, glfwGetKey(window, GLFW_KEY_TAB) == GLFW_PRESS);
             nk_input_key(NK_Context, NK_KEY_BACKSPACE, glfwGetKey(window, GLFW_KEY_BACKSPACE) == GLFW_PRESS);
@@ -12958,22 +13406,14 @@ MainArgs
             nk_input_key(NK_Context, NK_KEY_RIGHT, glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS);
             nk_input_key(NK_Context, NK_KEY_UP, glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS);
             nk_input_key(NK_Context, NK_KEY_DOWN, glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS);
-
-            if (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS)
+            nk_input_key(NK_Context, NK_KEY_SHIFT, glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS);
             {
-                nk_input_key(NK_Context, NK_KEY_COPY, glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS);
-                nk_input_key(NK_Context, NK_KEY_PASTE, glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS);
-                nk_input_key(NK_Context, NK_KEY_CUT, glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS);
-                nk_input_key(NK_Context, NK_KEY_CUT, glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS);
-                nk_input_key(NK_Context, NK_KEY_SHIFT, 1);
-            } 
-            else
-            {
-                nk_input_key(NK_Context, NK_KEY_COPY, 0);
-                nk_input_key(NK_Context, NK_KEY_PASTE, 0);
-                nk_input_key(NK_Context, NK_KEY_CUT, 0);
-                nk_input_key(NK_Context, NK_KEY_SHIFT, 0);
-            }*/
+                const int mod = (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS
+                    || glfwGetKey(window, GLFW_KEY_LEFT_SUPER) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SUPER) == GLFW_PRESS);
+                nk_input_key(NK_Context, NK_KEY_COPY, mod && glfwGetKey(window, GLFW_KEY_C) == GLFW_PRESS);
+                nk_input_key(NK_Context, NK_KEY_PASTE, mod && glfwGetKey(window, GLFW_KEY_V) == GLFW_PRESS);
+                nk_input_key(NK_Context, NK_KEY_CUT, mod && glfwGetKey(window, GLFW_KEY_X) == GLFW_PRESS);
+            }
             
             nk_input_scroll(NK_Context, NK_Scroll);
             NK_Scroll.x = 0;
@@ -13003,8 +13443,10 @@ MainArgs
             s32 showLoadStateScreen = 0;
             s32 showSaveAGPScreen = 0;
             s32 showSaveEditsScreen = 0;
+            static s32 showSaveClipboardScreen = 0;
             s32 showLoadAGPScreen = 0;
             s32 showMetaDataTagEditor = 0;
+            s32 showClipboardEditor = 0;
             s32 showUserProfileScreen = 0;
             static u32 currGroup1 = 0;
             static u32 currGroup2 = 0;
@@ -13045,9 +13487,10 @@ MainArgs
                     }
                     showUserProfileScreen = nk_button_label(NK_Context, "User Profile");
                     showAboutScreen = nk_button_label(NK_Context, "About");
+                    nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 3);
+                    showClipboardEditor = nk_button_label(NK_Context, "Clipboard Editor");
                     if (currFileName)
                     {
-                        nk_layout_row_dynamic(NK_Context, Screen_Scale.y * 30.0f, 2);
                         if (nk_button_label(NK_Context, "Clear Cache")) showClearCacheScreen = 1; // used to clear cache for current opened sample
                         if (nk_button_label(NK_Context, "Debug Report")) Debug_UI_On = !Debug_UI_On;
                     }
@@ -14242,9 +14685,28 @@ MainArgs
 
                     if (FileBrowserRun("Load AGP", &loadAGPBrowser, NK_Context, (u32)showLoadAGPScreen)) 
                         Load_AGP(loadAGPBrowser.file);
+                }
 
+                MetaTagsEditorRun(NK_Context, (u08)showMetaDataTagEditor);
+                s32 saveAsClicked = 0;
+                ClipboardEditorRun(NK_Context, (u08)showClipboardEditor, window, &showSaveClipboardScreen, &saveAsClicked);
 
-                    MetaTagsEditorRun(NK_Context, (u08)showMetaDataTagEditor);
+                {
+                    struct nk_window *clipEdW = nk_window_find(NK_Context, "Clipboard Editor");
+                    if (clipEdW && (clipEdW->flags & NK_WINDOW_HIDDEN))
+                        showSaveClipboardScreen = 0;
+                    struct nk_window *saveClipW = nk_window_find(NK_Context, "Save Clipboard");
+                    if (saveClipW && (saveClipW->flags & NK_WINDOW_HIDDEN) && !saveAsClicked)
+                        showSaveClipboardScreen = 0;
+                    u08 state;
+                    if ((state = FileBrowserRun("Save Clipboard", &saveClipboardBrowser, NK_Context, (u32)showSaveClipboardScreen, 4))) 
+                    {
+                        FenceIn(SaveClipboardToFile(saveClipboardBrowser.file, state & 2));
+                        FileBrowserReloadDirectoryContent(&saveClipboardBrowser, saveClipboardBrowser.directory);
+                        struct nk_window *saveClipboardWindow = nk_window_find(NK_Context, "Save Clipboard");
+                        if (saveClipboardWindow) saveClipboardWindow->flags |= NK_WINDOW_HIDDEN;
+                        showSaveClipboardScreen = 0;
+                    }
                 }
 
                 AboutWindowRun(NK_Context, (u32)showAboutScreen);

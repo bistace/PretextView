@@ -4,7 +4,93 @@
 #include "utilsPretextView.h"
 #include "showWindowData.h"
 #include "genomeData.h"
+#include <algorithm>
+#include <vector>
 
+namespace {
+
+inline u32 median_u32_3(u32 a, u32 b, u32 c)
+{
+    if (a > b) std::swap(a, b);
+    if (b > c) std::swap(b, c);
+    if (a > b) std::swap(a, b);
+    return b;
+}
+
+// Hi-C map contig ids can flip for single pixels at boundaries; median-of-3 along the 1D axis
+// stabilizes runs so Pixel Sort does not build huge duplicate fragment lists (e.g. 130,131,130,...).
+inline u32 smoothed_contig_id_1d(
+    map_state* Map_State,
+    u32 i,
+    u32 start_pixel,
+    u32 end_pixel)
+{
+    u32 left = (i > start_pixel) ? Map_State->contigIds[i - 1] : Map_State->contigIds[i];
+    u32 mid = Map_State->contigIds[i];
+    u32 right = (i < end_pixel) ? Map_State->contigIds[i + 1] : Map_State->contigIds[i];
+    return median_u32_3(left, mid, right);
+}
+
+// Median-of-3 can still alternate every pixel when raw contigIds alternate. Collapse a trailing
+// suffix that strictly alternates between exactly two ids (length >= 4) to [left, other] in map order.
+inline void collapse_alternating_two_contig_suffix(std::vector<u32>& ids)
+{
+    const size_t n = ids.size();
+    if (n < 4) return;
+
+    const size_t e = n - 1;
+    const u32 a = ids[e];
+    const u32 b = ids[e - 1];
+    if (a == b) return;
+
+    size_t s = e - 1;
+    while (s > 0)
+    {
+        const u32 x = ids[s - 1];
+        if (x != a && x != b) break;
+        if (x == ids[s]) break;
+        --s;
+    }
+
+    const size_t len = n - s;
+    if (len < 4) return;
+
+    for (size_t i = s; i + 1 < n; ++i)
+        if (ids[i] == ids[i + 1]) return;
+
+    for (size_t i = s; i < n; ++i)
+        if (ids[i] != a && ids[i] != b) return;
+
+    const u32 left = ids[s];
+    const u32 other = (left == a) ? b : a;
+    ids.erase(ids.begin() + (ptrdiff_t)s, ids.end());
+    ids.push_back(left);
+    ids.push_back(other);
+}
+
+inline std::vector<u32> build_smoothed_selected_run_ids(
+    map_state* Map_State,
+    u32 sp,
+    u32 ep)
+{
+    std::vector<u32> out;
+    if (sp > ep) return out;
+    u32 last = smoothed_contig_id_1d(Map_State, sp, sp, ep);
+    out.push_back(last);
+    for (u32 i = sp + 1; i <= ep; i++)
+    {
+        u32 cur = smoothed_contig_id_1d(Map_State, i, sp, ep);
+        if (cur != last)
+        {
+            out.push_back(cur);
+            last = cur;
+        }
+    }
+    collapse_alternating_two_contig_suffix(out);
+    return out;
+}
+
+} // namespace
 
 struct SelectArea
 {   
@@ -231,7 +317,13 @@ public:
         u32 number_of_pixels_1D
     ) 
     {
-        if (this->start_pixel > number_of_pixels_1D || this->end_pixel > number_of_pixels_1D || this->start_pixel < 0 || this->end_pixel < 0)
+        // Bounds: Map_State->contigIds is [0, number_of_pixels_1D - 1]. Reject >= number_of_pixels_1D
+        // (a strict `>` check would wrongly allow end_pixel == number_of_pixels_1D and overrun the array).
+        if (number_of_pixels_1D == 0 ||
+            this->start_pixel >= (s32)number_of_pixels_1D ||
+            this->end_pixel >= (s32)number_of_pixels_1D ||
+            this->start_pixel < 0 ||
+            this->end_pixel < 0)
         {
             return 0;
         }
@@ -240,15 +332,8 @@ public:
             std::swap(this->start_pixel, this->end_pixel);
         }
 
-        u32 num_selected_frags = 1;
-        for (u32 i = this->start_pixel+1; i <= this->end_pixel; i++)
-        {
-            if (Map_State->contigIds[i] != Map_State->contigIds[i-1])
-            {
-                num_selected_frags ++;
-            }
-        }
-        return num_selected_frags;
+        u32 sp = (u32)this->start_pixel, ep = (u32)this->end_pixel;
+        return (u32)build_smoothed_selected_run_ids(Map_State, sp, ep).size();
     }
 
     std::vector<u32> get_selected_fragments_id(
@@ -257,7 +342,12 @@ public:
     )
     {
         std::vector<u32> selected_frag_ids={};
-        if (this->start_pixel > number_of_pixels_1D || this->end_pixel > number_of_pixels_1D || this->start_pixel < 0 || this->end_pixel < 0)
+        // Same bounds as get_selected_fragments_num / get_selected_fragments.
+        if (number_of_pixels_1D == 0 ||
+            this->start_pixel >= (s32)number_of_pixels_1D ||
+            this->end_pixel >= (s32)number_of_pixels_1D ||
+            this->start_pixel < 0 ||
+            this->end_pixel < 0)
         {
             return selected_frag_ids;
         }
@@ -266,18 +356,8 @@ public:
             std::swap(this->start_pixel, this->end_pixel);
         }
 
-        u32 last_contig_id = Map_State->contigIds[this->start_pixel];
-        selected_frag_ids.push_back(last_contig_id);
-        for (u32 i = this->start_pixel+1; i <= this->end_pixel; i++)
-        {
-            if (last_contig_id == Map_State->contigIds[i]) continue;
-            else
-            {
-                last_contig_id = Map_State->contigIds[i];
-                selected_frag_ids.push_back(last_contig_id);
-            }
-        }
-        return selected_frag_ids;
+        u32 sp = (u32)this->start_pixel, ep = (u32)this->end_pixel;
+        return build_smoothed_selected_run_ids(Map_State, sp, ep);
     }
 
 
@@ -289,11 +369,17 @@ public:
         u08 exclude_flag=false
     ) // return cluster_flag
     {   
-        if (this->start_pixel > number_of_pixels_1D || this->end_pixel > number_of_pixels_1D || this->start_pixel < 0 || this->end_pixel < 0)
+        // Walk [start_pixel, end_pixel] and record one fragment id per contig run (when contigIds changes).
+        // - Bounds: indices must satisfy 0 <= start/end < number_of_pixels_1D (use >= below; do not use
+        //   end_pixel > number_of_pixels_1D only, or end_pixel == number_of_pixels_1D can index past the array).
+        // - clearup() every time: avoids stale source_frag_id / sink_frag_id when the new selection has no
+        //   neighbour on the left (start at 0) or right (end at last pixel); those stay -1 by design.
+        if (number_of_pixels_1D == 0 ||
+            this->start_pixel >= (s32)number_of_pixels_1D ||
+            this->end_pixel >= (s32)number_of_pixels_1D ||
+            this->start_pixel < 0 ||
+            this->end_pixel < 0)
         {   
-            // fmt::println(stderr, 
-            //     "[AutoCurationState::get_selected_fragments]: start_pixel({}) should smaller than end_pixel({}), and they should be within [0, Number_of_Pixels_1D({})-1], file:{}, line:{}\n",
-            //     this->start_pixel, this->end_pixel, number_of_pixels_1D, __FILE__, __LINE__);
             return ;
         }
         if (this->start_pixel > this->end_pixel)
@@ -301,52 +387,43 @@ public:
             std::swap(this->start_pixel, this->end_pixel);
         }
 
-        if (!select_area.selected_frag_ids.empty() )
-        {
-            select_area.clearup();
-        }
+        select_area.clearup();
 
-        // push the selected frag id into select_area
-        select_area.start_pixel = this->start_pixel;
-        select_area.end_pixel = this->end_pixel;
-        u32 last_contig_id = Map_State->contigIds[this->start_pixel];
-        select_area.selected_frag_ids.push_back(last_contig_id);
-        for (u32 i = start_pixel+1; i <= this->end_pixel; i ++ )
-        {
-            if (last_contig_id == Map_State->contigIds[i]) continue;
-            else
-            {   
-                last_contig_id = Map_State->contigIds[i];
-                select_area.selected_frag_ids.push_back(last_contig_id);
-            }
-        }
+        // Copy run list into select_area (use this->start_pixel / this->end_pixel consistently for the loop).
+        select_area.start_pixel = (u32)this->start_pixel;
+        select_area.end_pixel = (u32)this->end_pixel;
+        u32 sp = select_area.start_pixel, ep = select_area.end_pixel;
+        for (u32 cid : build_smoothed_selected_run_ids(Map_State, sp, ep))
+            select_area.selected_frag_ids.push_back((s32)cid);
 
-        // define source frag
-        if (this->start_pixel>0 ) // if selected frags <= 5, still sort them together without clustering first.
+        // Source = fragment on the pixel immediately before the selection (contigIds[start_pixel - 1]).
+        // If start_pixel == 0 there is no left neighbour; source_frag_id remains -1 (callers must handle).
+        select_area.source_frag_id = -1;
+        if (this->start_pixel > 0)
         {   
-            u32 frag_id = Map_State->contigIds[this->start_pixel-1];
+            u32 frag_id = Map_State->contigIds[(u32)this->start_pixel - 1];
             if (Contigs->contigs_arr[frag_id].length >= this->smallest_frag_size_in_pixel)
             {
-                select_area.source_frag_id = frag_id;
+                select_area.source_frag_id = (s32)frag_id;
             }
             else
             {   
-                select_area.source_frag_id = -1;
                 fmt::print("The source_frag_len ({}) < smallest_length ({}), not set the source frag.\n", Contigs->contigs_arr[frag_id].length, this->smallest_frag_size_in_pixel);
             }
         }
         
-        // define sink frag
-        if (this->end_pixel + 1 <= number_of_pixels_1D - 1)
+        // Sink = fragment on the pixel immediately after the selection (contigIds[end_pixel + 1]).
+        // If end_pixel is the last map pixel, end_pixel + 1 is out of range; sink_frag_id remains -1.
+        select_area.sink_frag_id = -1;
+        if ((u32)this->end_pixel + 1u < number_of_pixels_1D)
         {   
-            u32 frag_id = Map_State->contigIds[this->end_pixel+1];
+            u32 frag_id = Map_State->contigIds[(u32)this->end_pixel + 1u];
             if (Contigs->contigs_arr[frag_id].length >= this->smallest_frag_size_in_pixel)
             {
-                select_area.sink_frag_id = frag_id;
+                select_area.sink_frag_id = (s32)frag_id;
             }
             else
             {   
-                select_area.sink_frag_id = -1;
                 fmt::print("The tail_frag_len ({}) < smallest_length ({}), not set the tail frag.\n", Contigs->contigs_arr[frag_id].length, this->smallest_frag_size_in_pixel);
             }
         }
