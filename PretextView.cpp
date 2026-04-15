@@ -10131,6 +10131,7 @@ KeyBoard(GLFWwindow* window, s32 key, s32 scancode, s32 action, s32 mods)
                         }
 
                         Edit_Pixels.tabSelecting = !Edit_Pixels.tabSelectedRanges.empty();
+                        Redisplay = 1;
                     }
                     break;
 
