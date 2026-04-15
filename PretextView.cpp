@@ -6058,7 +6058,9 @@ Render() {
                         (char *)"S: toggle snap mode",
                         (char *)"Middle Click / Spacebar: pickup whole sequence or (hold Shift): scaffold",
                         (char *)"Middle Click / Spacebar (while editing): invert sequence",
-                        (char *)"Tab: mark sequence for multi-select, Space: commit"
+                        (char *)"P: copy highlight to clipboard",
+                        (char *)"V: break at selection start",
+                        (char *)"Tab: mark sequences for multi-select, Space/Middle Click: consolidate"
                     };
 
                     textBoxHeight = (f32)helpTexts.size() * (lh + 1.0f) - 1.0f;
